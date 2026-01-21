@@ -833,12 +833,14 @@ def proxy_ignition_ops_jira():
 def proxy_ignition_ops_jira_issue(issue_key):
     """
     Proxy endpoint for a specific Jira issue via Ignition.
-    Forwards requests to: {IGNITION_API_BASE_URL}/ops/jira/{issue_key}
+    Forwards requests to: {IGNITION_API_BASE_URL}/ops/jira?issueKey={issue_key}
     """
     try:
-        target_url = f'{IGNITION_API_BASE_URL}/ops/jira/{issue_key}'
+        # Ignition expects issueKey as query param, not path segment
+        target_url = f'{IGNITION_API_BASE_URL}/ops/jira'
         
         request_kwargs = {
+            'params': {'issueKey': issue_key},
             'headers': {'Accept': 'application/json'},
             'timeout': 30,
             'verify': False
