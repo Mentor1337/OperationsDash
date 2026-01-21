@@ -1,0 +1,168 @@
+/* Operations Dashboard Custom Styles */
+
+/* Status badge colors */
+.status-on-track { @apply bg-green-100 text-green-800 border-green-300; }
+.status-at-risk { @apply bg-yellow-100 text-yellow-800 border-yellow-300; }
+.status-behind { @apply bg-red-100 text-red-800 border-red-300; }
+.status-planned { @apply bg-blue-100 text-blue-800 border-blue-300; }
+.status-completed { @apply bg-purple-100 text-purple-800 border-purple-300; }
+.status-cancelled { @apply bg-gray-100 text-gray-500 border-gray-300; }
+
+/* Priority badge colors */
+.priority-critical { @apply bg-red-100 text-red-800; }
+.priority-high { @apply bg-orange-100 text-orange-800; }
+.priority-medium { @apply bg-yellow-100 text-yellow-800; }
+.priority-low { @apply bg-gray-100 text-gray-600; }
+
+/* Tab styling */
+.tab-btn.active {
+    color: #2563eb;
+    border-bottom: 2px solid #2563eb;
+}
+
+/* Card hover effects */
+.project-card {
+    transition: all 0.2s ease-in-out;
+}
+
+.project-card:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+/* Modal backdrop */
+.modal {
+    animation: fadeIn 0.2s ease-in-out;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+/* Progress bar animation */
+.progress-bar {
+    transition: width 0.3s ease-in-out;
+}
+
+/* Chart container */
+.chart-container {
+    position: relative;
+    height: 300px;
+    width: 100%;
+}
+
+/* Resource bar styling */
+.resource-bar {
+    height: 24px;
+    border-radius: 4px;
+    overflow: hidden;
+    display: flex;
+}
+
+.resource-bar div {
+    height: 100%;
+    transition: width 0.3s ease;
+}
+
+/* Milestone status icons */
+.milestone-completed { color: #10b981; }
+.milestone-at-risk { color: #f59e0b; }
+.milestone-pending { color: #9ca3af; }
+
+/* Table styling for breakdown */
+.breakdown-table {
+    font-size: 0.875rem;
+}
+
+.breakdown-table th,
+.breakdown-table td {
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+}
+
+.breakdown-table th {
+    background-color: #f3f4f6;
+    font-weight: 600;
+}
+
+.breakdown-table tr:nth-child(even) {
+    background-color: #f9fafb;
+}
+
+/* Loading spinner */
+.spinner {
+    border: 3px solid #f3f4f6;
+    border-top: 3px solid #3b82f6;
+    border-radius: 50%;
+    width: 24px;
+    height: 24px;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Gantt chart styling */
+.gantt-bar {
+    height: 24px;
+    border-radius: 4px;
+    display: flex;
+    overflow: hidden;
+}
+
+.gantt-bar-completed {
+    background-color: rgba(59, 130, 246, 0.8);
+}
+
+.gantt-bar-remaining {
+    background-color: rgba(59, 130, 246, 0.3);
+}
+
+/* Milestone diamond marker */
+.milestone-marker {
+    width: 10px;
+    height: 10px;
+    transform: rotate(45deg);
+    position: absolute;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .grid-cols-4 {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    
+    .chart-container {
+        height: 250px;
+    }
+}
+
+/* Toast notifications */
+.toast {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    padding: 12px 24px;
+    border-radius: 8px;
+    color: white;
+    font-weight: 500;
+    z-index: 100;
+    animation: slideIn 0.3s ease-out;
+}
+
+.toast-success { background-color: #10b981; }
+.toast-error { background-color: #ef4444; }
+.toast-info { background-color: #3b82f6; }
+
+@keyframes slideIn {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}

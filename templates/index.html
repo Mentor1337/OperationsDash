@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Operations Dashboard</title>
+	<script src="https://cdn.tailwindcss.com"></script>
+	<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+	<link rel="stylesheet" href="/static/css/style.css">
+</head>
+
+<body class="bg-gray-100 min-h-screen">
+	<!-- Jira API Expiry Banner -->
+	<div id="jira-expiry-banner" class="hidden bg-yellow-500 text-white px-4 py-3 text-center font-medium">
+		<span id="jira-expiry-message"></span>
+	</div>
+
+	<div id="app" class="p-6">
+		<!-- Header -->
+		<div class="mb-6">
+			<h1 class="text-3xl font-bold text-gray-800">Operations Dashboard</h1>
+			<p class="text-gray-600">Engineering Project Management</p>
+		</div>
+
+		<!-- Tabs -->
+		<div class="flex space-x-4 border-b border-gray-200 mb-6">
+			<button onclick="setTab('projects')" id="tab-projects"
+				class="tab-btn px-4 py-2 font-medium text-blue-600 border-b-2 border-blue-600">
+				Projects
+			</button>
+			<button onclick="setTab('roadmap')" id="tab-roadmap"
+				class="tab-btn px-4 py-2 font-medium text-gray-600 hover:text-gray-800">
+				Roadmap
+			</button>
+			<button onclick="setTab('milestones')" id="tab-milestones"
+				class="tab-btn px-4 py-2 font-medium text-gray-600 hover:text-gray-800">
+				Milestones
+			</button>
+			<button onclick="setTab('resources')" id="tab-resources"
+				class="tab-btn px-4 py-2 font-medium text-gray-600 hover:text-gray-800">
+				Resources
+			</button>
+		</div>
+
+		<!-- Tab Content -->
+		<div id="content-projects" class="tab-content"></div>
+		<div id="content-roadmap" class="tab-content hidden"></div>
+		<div id="content-milestones" class="tab-content hidden"></div>
+		<div id="content-resources" class="tab-content hidden"></div>
+	</div>
+
+	<!-- Project Edit Modal -->
+	<div id="modal-project"
+		class="modal hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+		<div class="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+			<div class="flex justify-between items-center mb-4">
+				<h3 class="text-xl font-bold" id="modal-project-title">Edit Project</h3>
+				<button onclick="closeModal('project')" class="text-gray-500 hover:text-gray-700">
+					<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12">
+						</path>
+					</svg>
+				</button>
+			</div>
+			<form id="form-project" onsubmit="saveProject(event)">
+				<input type="hidden" id="project-id">
+				<div class="space-y-4">
+					<div>
+						<label class="block text-sm font-medium text-gray-700 mb-1">Project Name</label>
+						<input type="text" id="project-name" required
+							class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+					</div>
+					<div class="grid grid-cols-2 gap-4">
+						<div>
+							<label class="block text-sm font-medium text-gray-700 mb-1">Owner</label>
+							<select id="project-owner"
+								class="w-full px-3 py-2 border border-gray-300 rounded-lg"></select>
+						</div>
+						<div>
+							<label class="block text-sm font-medium text-gray-700 mb-1">Priority</label>
+							<select id="project-priority" class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+								<option value="Critical">Critical</option>
+								<option value="High">High</option>
+								<option value="Medium">Medium</option>
+								<option value="Low">Low</option>
+							</select>
+						</div>
+					</div>
+					<div class="grid grid-cols-2 gap-4">
+						<div>
+							<label class="block text-sm font-medium text-gray-700 mb-1">Status</label>
+							<select id="project-status" class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+								<option value="On Track">On Track</option>
+								<option value="At Risk">At Risk</option>
+								<option value="Behind">Behind</option>
+								<option value="Planned">Planned</option>
+								<option value="Completed">Completed</option>
+								<option value="Cancelled">Cancelled</option>
+							</select>
+						</div>
+						<div>
+							<label class="block text-sm font-medium text-gray-700 mb-1">Progress %</label>
+							<input type="number" id="project-progress" min="0" max="100"
+								class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+						</div>
+					</div>
+					<div class="grid grid-cols-2 gap-4">
+						<div>
+							<label class="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
+							<input type="date" id="project-start-date"
+								class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+						</div>
+						<div>
+							<label class="block text-sm font-medium text-gray-700 mb-1">End Date</label>
+							<input type="date" id="project-end-date"
+								class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+						</div>
+					</div>
+					<div>
+						<label class="block text-sm font-medium text-gray-700 mb-1">Estimated Hours/Week</label>
+						<input type="number" id="project-hours" min="0"
+							class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+					</div>
+					<div class="grid grid-cols-2 gap-4">
+						<div>
+							<label class="block text-sm font-medium text-gray-700 mb-1">Budget ($)</label>
+							<input type="number" id="project-budget" min="0" step="0.01"
+								class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+						</div>
+						<div>
+							<label class="block text-sm font-medium text-gray-700 mb-1">Spent ($)</label>
+							<input type="number" id="project-spent" min="0" step="0.01"
+								class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+						</div>
+					</div>
+					<div>
+						<label class="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+						<textarea id="project-notes" rows="3"
+							class="w-full px-3 py-2 border border-gray-300 rounded-lg"></textarea>
+					</div>
+					<div>
+						<label class="block text-sm font-medium text-gray-700 mb-1">Jira Key <span
+								class="text-gray-400 text-xs">(e.g., PROJ-123)</span></label>
+						<input type="text" id="project-jira-key" placeholder="PROJ-123"
+							class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+					</div>
+				</div>
+				<div class="flex justify-between pt-4 mt-4 border-t">
+					<button type="button" id="btn-delete-project" onclick="deleteProject()"
+						class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 hidden">
+						Delete Project
+					</button>
+					<div class="flex space-x-3 ml-auto">
+						<button type="button" onclick="closeModal('project')"
+							class="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">
+							Cancel
+						</button>
+						<button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+							Save Changes
+						</button>
+					</div>
+				</div>
+			</form>
+		</div>
+	</div>
+
+	<!-- Expense Modal -->
+	<div id="modal-expense"
+		class="modal hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+		<div class="bg-white rounded-lg p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+			<div class="flex justify-between items-center mb-4">
+				<div>
+					<h3 class="text-xl font-bold">Manage Expenses</h3>
+					<p class="text-sm text-gray-600" id="expense-project-name"></p>
+				</div>
+				<button onclick="closeModal('expense')" class="text-gray-500 hover:text-gray-700">
+					<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12">
+						</path>
+					</svg>
+				</button>
+			</div>
+			<input type="hidden" id="expense-project-id">
+
+			<!-- Budget Summary -->
+			<div class="bg-gray-50 rounded-lg p-4 mb-6">
+				<div class="grid grid-cols-4 gap-4 text-center">
+					<div>
+						<p class="text-sm text-gray-600">Budget</p>
+						<p class="text-xl font-bold text-gray-800" id="expense-budget">$0</p>
+					</div>
+					<div>
+						<p class="text-sm text-gray-600">Spent</p>
+						<p class="text-xl font-bold text-gray-800" id="expense-spent">$0</p>
+					</div>
+					<div>
+						<p class="text-sm text-gray-600">Remaining</p>
+						<p class="text-xl font-bold" id="expense-remaining">$0</p>
+					</div>
+					<div>
+						<p class="text-sm text-gray-600">% Used</p>
+						<p class="text-xl font-bold text-gray-800" id="expense-percent">0%</p>
+					</div>
+				</div>
+				<div class="w-full bg-gray-200 rounded-full h-3 mt-3">
+					<div id="expense-progress-bar" class="h-3 rounded-full bg-green-600 transition-all duration-300"
+						style="width: 0%"></div>
+				</div>
+			</div>
+
+			<!-- Add Expense Form -->
+			<div class="bg-blue-50 rounded-lg p-4 mb-4">
+				<h4 class="font-medium text-gray-800 mb-3">Add New Expense</h4>
+				<div class="grid grid-cols-2 gap-3">
+					<div>
+						<label class="block text-sm font-medium text-gray-700 mb-1">Date</label>
+						<input type="date" id="new-expense-date"
+							class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+					</div>
+					<div>
+						<label class="block text-sm font-medium text-gray-700 mb-1">Amount ($)</label>
+						<input type="number" id="new-expense-amount" min="0" step="0.01"
+							class="w-full px-3 py-2 border border-gray-300 rounded-lg" placeholder="0">
+					</div>
+					<div>
+						<label class="block text-sm font-medium text-gray-700 mb-1">Category</label>
+						<select id="new-expense-category" class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+							<option value="Equipment">Equipment</option>
+							<option value="Labor">Labor</option>
+							<option value="Services">Services</option>
+							<option value="Software">Software</option>
+							<option value="Materials">Materials</option>
+							<option value="Other">Other</option>
+						</select>
+					</div>
+					<div>
+						<label class="block text-sm font-medium text-gray-700 mb-1">Description</label>
+						<input type="text" id="new-expense-description"
+							class="w-full px-3 py-2 border border-gray-300 rounded-lg" placeholder="Brief description">
+					</div>
+				</div>
+				<button onclick="addExpense()"
+					class="mt-3 w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+					Add Expense
+				</button>
+			</div>
+
+			<!-- Expenses List -->
+			<div>
+				<h4 class="font-medium text-gray-800 mb-3">Expense History</h4>
+				<div id="expenses-list" class="space-y-2"></div>
+			</div>
+
+			<div class="flex justify-end space-x-3 pt-4 mt-6 border-t">
+				<button onclick="closeModal('expense')"
+					class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+					Done
+				</button>
+			</div>
+		</div>
+	</div>
+
+	<!-- Milestone Modal -->
+	<div id="modal-milestone"
+		class="modal hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+		<div class="bg-white rounded-lg p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+			<div class="flex justify-between items-center mb-4">
+				<div>
+					<h3 class="text-xl font-bold">Manage Milestones</h3>
+					<p class="text-sm text-gray-600" id="milestone-project-name"></p>
+				</div>
+				<button onclick="closeModal('milestone')" class="text-gray-500 hover:text-gray-700">
+					<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12">
+						</path>
+					</svg>
+				</button>
+			</div>
+			<input type="hidden" id="milestone-project-id">
+
+			<!-- Add Milestone Form -->
+			<div class="bg-blue-50 rounded-lg p-4 mb-4">
+				<h4 class="font-medium text-gray-800 mb-3">Add New Milestone</h4>
+				<div class="grid grid-cols-2 gap-3">
+					<div class="col-span-2">
+						<label class="block text-sm font-medium text-gray-700 mb-1">Milestone Name</label>
+						<input type="text" id="new-milestone-name"
+							class="w-full px-3 py-2 border border-gray-300 rounded-lg"
+							placeholder="e.g., Equipment Procurement Complete">
+					</div>
+					<div>
+						<label class="block text-sm font-medium text-gray-700 mb-1">Planned Date</label>
+						<input type="date" id="new-milestone-date"
+							class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+					</div>
+					<div>
+						<label class="block text-sm font-medium text-gray-700 mb-1">Status</label>
+						<select id="new-milestone-status" class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+							<option value="pending">Pending</option>
+							<option value="at-risk">At Risk</option>
+							<option value="completed">Completed</option>
+						</select>
+					</div>
+				</div>
+				<button onclick="addMilestone()"
+					class="mt-3 w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+					Add Milestone
+				</button>
+			</div>
+
+			<!-- Milestones List -->
+			<div>
+				<h4 class="font-medium text-gray-800 mb-3">Project Milestones</h4>
+				<div id="milestones-list" class="space-y-2"></div>
+			</div>
+
+			<div class="flex justify-end space-x-3 pt-4 mt-6 border-t">
+				<button onclick="closeModal('milestone')"
+					class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+					Done
+				</button>
+			</div>
+		</div>
+	</div>
+
+	<!-- Task Modal -->
+	<div id="modal-task"
+		class="modal hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+		<div class="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+			<div class="flex justify-between items-center mb-4">
+				<div>
+					<h3 class="text-xl font-bold">Manage Team Assignments</h3>
+					<p class="text-sm text-gray-600" id="task-project-name"></p>
+				</div>
+				<button onclick="closeModal('task')" class="text-gray-500 hover:text-gray-700">
+					<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12">
+						</path>
+					</svg>
+				</button>
+			</div>
+			<input type="hidden" id="task-project-id">
+
+			<!-- Add Task Form -->
+			<div class="bg-blue-50 rounded-lg p-4 mb-4">
+				<h4 class="font-medium text-gray-800 mb-3">Add Team Member</h4>
+				<div class="grid grid-cols-2 gap-3">
+					<div>
+						<label class="block text-sm font-medium text-gray-700 mb-1">Engineer</label>
+						<select id="new-task-engineer"
+							class="w-full px-3 py-2 border border-gray-300 rounded-lg"></select>
+					</div>
+					<div>
+						<label class="block text-sm font-medium text-gray-700 mb-1">Hours per Week</label>
+						<input type="number" id="new-task-hours" min="0" max="40"
+							class="w-full px-3 py-2 border border-gray-300 rounded-lg" placeholder="0">
+					</div>
+				</div>
+				<button onclick="addTask()"
+					class="mt-3 w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+					Add Assignment
+				</button>
+			</div>
+
+			<!-- Tasks List -->
+			<div>
+				<h4 class="font-medium text-gray-800 mb-3">Current Assignments</h4>
+				<div id="tasks-list" class="space-y-2"></div>
+			</div>
+
+			<!-- Team Summary -->
+			<div id="task-summary" class="mt-4 p-3 bg-gray-100 rounded-lg hidden">
+				<h4 class="font-medium text-gray-700 mb-2">Project Resource Summary</h4>
+				<div class="text-sm text-gray-600">
+					<p>Total Hours: <span id="task-total-hours" class="font-semibold text-gray-800">0 hrs/week</span>
+					</p>
+					<p class="mt-1">Team Members: <span id="task-member-count"
+							class="font-semibold text-gray-800">0</span></p>
+				</div>
+			</div>
+
+			<div class="flex justify-end space-x-3 pt-4 mt-6 border-t">
+				<button onclick="closeModal('task')"
+					class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+					Done
+				</button>
+			</div>
+		</div>
+	</div>
+
+	<!-- Engineer Modal -->
+	<div id="modal-engineer"
+		class="modal hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+		<div class="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+			<div class="flex justify-between items-center mb-4">
+				<h3 class="text-xl font-bold" id="modal-engineer-title">Edit Engineer</h3>
+				<button onclick="closeModal('engineer')" class="text-gray-500 hover:text-gray-700">
+					<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12">
+						</path>
+					</svg>
+				</button>
+			</div>
+			<form id="form-engineer" onsubmit="saveEngineer(event)">
+				<input type="hidden" id="engineer-id">
+				<div class="space-y-4">
+					<div>
+						<label class="block text-sm font-medium text-gray-700 mb-1">Name</label>
+						<input type="text" id="engineer-name" required
+							class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+					</div>
+					<div>
+						<label class="block text-sm font-medium text-gray-700 mb-1">Role</label>
+						<input type="text" id="engineer-role"
+							class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+					</div>
+					<div>
+						<label class="block text-sm font-medium text-gray-700 mb-1">Total Hours/Week</label>
+						<input type="number" id="engineer-hours" min="0" max="168" value="40"
+							class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+					</div>
+
+					<!-- Non-Project Time Section -->
+					<div class="border-t pt-4">
+						<h4 class="font-medium text-gray-700 mb-3">Non-Project Time Allocations</h4>
+						<div id="non-project-time-list" class="space-y-2 mb-3"></div>
+						<div class="grid grid-cols-3 gap-2">
+							<input type="text" id="new-npt-type" placeholder="Type (e.g., Meetings)"
+								class="px-3 py-2 border border-gray-300 rounded-lg">
+							<input type="number" id="new-npt-hours" placeholder="Hours" min="0"
+								class="px-3 py-2 border border-gray-300 rounded-lg">
+							<button type="button" onclick="addNonProjectTime()"
+								class="px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">Add</button>
+						</div>
+					</div>
+				</div>
+				<div class="flex justify-between pt-4 mt-4 border-t">
+					<button type="button" id="btn-delete-engineer" onclick="deleteEngineer()"
+						class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 hidden">
+						Delete Engineer
+					</button>
+					<div class="flex space-x-3 ml-auto">
+						<button type="button" onclick="closeModal('engineer')"
+							class="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">
+							Cancel
+						</button>
+						<button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+							Save Changes
+						</button>
+					</div>
+				</div>
+			</form>
+		</div>
+	</div>
+
+	<!-- Jira Issues Modal -->
+	<div id="modal-jira"
+		class="modal hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+		<div class="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+			<div class="flex justify-between items-center mb-4">
+				<div>
+					<h3 class="text-xl font-bold">Jira Overview</h3>
+					<p class="text-sm text-gray-600" id="jira-project-name"></p>
+				</div>
+				<button onclick="closeModal('jira')" class="text-gray-500 hover:text-gray-700">
+					<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12">
+						</path>
+					</svg>
+				</button>
+			</div>
+
+			<!-- Main Issue -->
+			<div id="jira-main-issue" class="bg-blue-50 rounded-lg p-4 mb-4"></div>
+
+			<!-- Child Issues -->
+			<div>
+				<h4 class="font-medium text-gray-800 mb-3">Tasks / Subtasks</h4>
+				<div id="jira-children-list" class="space-y-2"></div>
+			</div>
+
+			<div class="flex justify-end space-x-3 pt-4 mt-6 border-t">
+				<button onclick="closeModal('jira')"
+					class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+					Close
+				</button>
+			</div>
+		</div>
+	</div>
+
+	<script src="/static/js/app.js"></script>
+</body>
+
+</html>
