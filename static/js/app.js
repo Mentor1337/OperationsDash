@@ -1012,7 +1012,7 @@ async function openJiraModal(issueKey, projectName) {
     modal.classList.remove('hidden');
     
     try {
-        const response = await fetch(`${API}/api/jira/issue/${issueKey}`);
+        const response = await fetch(`${API}/api/ignition/ops/jira/${issueKey}`);
         
         if (!response.ok) {
             const error = await response.json();
