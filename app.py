@@ -31,7 +31,7 @@ JIRA_EMAIL = os.environ.get('JIRA_EMAIL', 'twilcox@proterra.com')  # Backup
 # Ignition API Configuration (air-gapped environment)
 IGNITION_API_BASE_URL = os.environ.get(
     'IGNITION_API_BASE_URL', 
-    'https://ignitionmes1.mes-greer.proterra.com/system/webdev/HexMES/api/v1'
+    'https://ignitionmes1.mes-greer.proterra.com:8043/system/webdev/HexMES/api/v1'
 )
 IGNITION_API_USERNAME = os.environ.get('IGNITION_API_USERNAME', '')  # Optional
 IGNITION_API_PASSWORD = os.environ.get('IGNITION_API_PASSWORD', '')  # Optional
