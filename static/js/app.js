@@ -9,6 +9,27 @@ let currentTab = 'projects';
 let currentProject = null;
 let searchQuery = '';
 let statusFilter = 'all';
+let ownerFilter = 'all';
+let priorityFilter = 'all';
+let expandedProjects = new Set();
+
+// Date range selectors
+let ganttDateRange = String(new Date().getFullYear());
+let milestoneDateRange = String(new Date().getFullYear());
+let capacityDateRange = String(new Date().getFullYear());
+let ganttCustomStart = '';
+let ganttCustomEnd = '';
+let milestoneCustomStart = '';
+let milestoneCustomEnd = '';
+let capacityCustomStart = '';
+let capacityCustomEnd = '';
+let showMilestones = true;
+
+// Chart instances for cleanup
+let ganttChartInstance = null;
+let capacityChartInstance = null;
+let milestoneCumulativeChartInstance = null;
+let capacityTrendChartInstance = null;
 
 // ============================================================================
 // Initialization
@@ -68,6 +89,12 @@ function renderCurrentTab() {
 
 function renderProjects() {
     const container = document.getElementById('content-projects');
+    const uniqueOwners = [...new Set(projects.map(p => p.owner).filter(Boolean))];
+    const priorities = ['Critical', 'High', 'Medium', 'Low'];
+    const statuses = ['On Track', 'At Risk', 'Behind', 'Planned', 'Completed', 'Cancelled'];
+    const hasActiveFilters = ownerFilter !== 'all' || priorityFilter !== 'all' || statusFilter !== 'all';
+    const filtered = getFilteredProjects();
+    
     container.innerHTML = `
         <div class="flex justify-between items-center mb-4">
             <h2 class="text-2xl font-bold text-gray-800">Active Projects</h2>
@@ -76,29 +103,49 @@ function renderProjects() {
                 <span>Add Project</span>
             </button>
         </div>
-        <div class="flex items-center space-x-4 mb-4">
-            <div class="flex-1 relative">
-                <input type="text" id="project-search" placeholder="Search projects..." 
-                    class="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    value="${searchQuery}" oninput="handleSearch(this.value)">
-                <svg class="w-5 h-5 absolute left-3 top-2.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
-                </svg>
+        
+        <!-- Filters -->
+        <div class="bg-white rounded-lg shadow-md p-4 mb-4">
+            <div class="flex items-center space-x-4 mb-4">
+                <svg class="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"></path></svg>
+                <span class="font-medium text-gray-700">Filters:</span>
+                ${hasActiveFilters ? `<button onclick="clearFilters()" class="text-sm text-blue-600 hover:text-blue-700">Clear Filters</button>` : ''}
+                <span class="text-sm text-gray-600">Showing ${filtered.length} of ${projects.length} projects</span>
             </div>
-            <select id="status-filter" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" onchange="handleStatusFilter(this.value)">
-                <option value="all" ${statusFilter === 'all' ? 'selected' : ''}>All Statuses</option>
-                <option value="On Track" ${statusFilter === 'On Track' ? 'selected' : ''}>On Track</option>
-                <option value="At Risk" ${statusFilter === 'At Risk' ? 'selected' : ''}>At Risk</option>
-                <option value="Behind" ${statusFilter === 'Behind' ? 'selected' : ''}>Behind</option>
-                <option value="Planned" ${statusFilter === 'Planned' ? 'selected' : ''}>Planned</option>
-                <option value="Completed" ${statusFilter === 'Completed' ? 'selected' : ''}>Completed</option>
-            </select>
+            <div class="grid grid-cols-4 gap-4">
+                <div class="flex-1 relative">
+                    <input type="text" id="project-search" placeholder="Search projects..." 
+                        class="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        value="${searchQuery}" oninput="handleSearch(this.value)">
+                    <svg class="w-5 h-5 absolute left-3 top-2.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                    </svg>
+                </div>
+                <div>
+                    <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleOwnerFilter(this.value)">
+                        <option value="all" ${ownerFilter === 'all' ? 'selected' : ''}>All Owners</option>
+                        ${uniqueOwners.map(owner => `<option value="${owner}" ${ownerFilter === owner ? 'selected' : ''}>${owner}</option>`).join('')}
+                    </select>
+                </div>
+                <div>
+                    <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handlePriorityFilter(this.value)">
+                        <option value="all" ${priorityFilter === 'all' ? 'selected' : ''}>All Priorities</option>
+                        ${priorities.map(p => `<option value="${p}" ${priorityFilter === p ? 'selected' : ''}>${p}</option>`).join('')}
+                    </select>
+                </div>
+                <div>
+                    <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleStatusFilter(this.value)">
+                        <option value="all" ${statusFilter === 'all' ? 'selected' : ''}>All Statuses</option>
+                        ${statuses.map(s => `<option value="${s}" ${statusFilter === s ? 'selected' : ''}>${s}</option>`).join('')}
+                    </select>
+                </div>
+            </div>
         </div>
+        
         <div class="space-y-4" id="projects-list"></div>
     `;
     
     const list = document.getElementById('projects-list');
-    const filtered = getFilteredProjects();
     if (filtered.length === 0) {
         list.innerHTML = '<p class="text-gray-500 text-center py-8">No projects match your filters</p>';
     } else {
@@ -114,8 +161,10 @@ function getFilteredProjects() {
             p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
             p.owner.toLowerCase().includes(searchQuery.toLowerCase()) ||
             (p.notes && p.notes.toLowerCase().includes(searchQuery.toLowerCase()));
+        const matchesOwner = ownerFilter === 'all' || p.owner === ownerFilter;
+        const matchesPriority = priorityFilter === 'all' || p.priority === priorityFilter;
         const matchesStatus = statusFilter === 'all' || p.status === statusFilter;
-        return matchesSearch && matchesStatus;
+        return matchesSearch && matchesOwner && matchesPriority && matchesStatus;
     });
 }
 
@@ -124,80 +173,174 @@ function handleSearch(value) {
     renderProjects();
 }
 
+function handleOwnerFilter(value) {
+    ownerFilter = value;
+    renderProjects();
+}
+
+function handlePriorityFilter(value) {
+    priorityFilter = value;
+    renderProjects();
+}
+
 function handleStatusFilter(value) {
     statusFilter = value;
+    renderProjects();
+}
+
+function clearFilters() {
+    searchQuery = '';
+    ownerFilter = 'all';
+    priorityFilter = 'all';
+    statusFilter = 'all';
+    renderProjects();
+}
+
+function toggleProject(id) {
+    if (expandedProjects.has(id)) {
+        expandedProjects.delete(id);
+    } else {
+        expandedProjects.add(id);
+    }
     renderProjects();
 }
 
 function createProjectCard(p) {
     const statusClass = getStatusClass(p.status);
     const budgetPct = p.budget > 0 ? Math.round((p.spent / p.budget) * 100) : 0;
+    const isExpanded = expandedProjects.has(p.id);
+    const chevronIcon = isExpanded 
+        ? `<svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>`
+        : `<svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>`;
+    
+    // Build change history HTML if available
+    let changeHistoryHtml = '';
+    if (p.changeHistory && p.changeHistory.length > 0) {
+        const sortedChanges = [...p.changeHistory].sort((a, b) => new Date(b.changedAt) - new Date(a.changedAt));
+        changeHistoryHtml = `
+            <div class="mt-3">
+                <h4 class="font-medium text-gray-700 mb-2">Change History:</h4>
+                <div class="space-y-1 max-h-32 overflow-y-auto">
+                    ${sortedChanges.map(change => `
+                        <div class="text-xs bg-yellow-50 border border-yellow-200 rounded p-2">
+                            <div class="flex justify-between items-start">
+                                <span class="font-medium text-gray-700">${change.field} changed:</span>
+                                <span class="text-gray-500">${new Date(change.changedAt).toLocaleDateString()}</span>
+                            </div>
+                            <div class="mt-1 text-gray-600">
+                                <span class="line-through">${change.oldValue}</span>
+                                <span class="mx-1">→</span>
+                                <span class="font-medium text-gray-800">${change.newValue}</span>
+                            </div>
+                            ${change.changedBy ? `<div class="text-gray-500 mt-1">by ${change.changedBy}</div>` : ''}
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+    }
     
     return `
         <div class="bg-white rounded-lg shadow-md border border-gray-200 project-card">
-            <div class="p-4">
+            <div class="p-4 cursor-pointer hover:bg-gray-50" onclick="toggleProject(${p.id})">
                 <div class="flex justify-between items-start">
-                    <div class="flex-1">
-                        <div class="flex items-center space-x-3">
-                            <h3 class="text-lg font-semibold text-gray-800">${p.name}</h3>
-                            <span class="px-3 py-1 rounded-full text-xs font-medium border ${statusClass}">${p.status}</span>
-                            ${p.jiraKey ? `<button onclick="openJiraModal('${p.jiraKey}', '${p.name}')" class="px-2 py-1 bg-blue-50 text-blue-700 text-xs rounded border border-blue-200 hover:bg-blue-100 font-mono">${p.jiraKey}</button>` : ''}
-                        </div>
-                        <div class="mt-2 flex items-center space-x-4 text-sm text-gray-600">
-                            <span class="flex items-center space-x-1">
-                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path></svg>
-                                <span>${p.owner}</span>
-                            </span>
-                            <span>${p.startDate} to ${p.endDate}</span>
-                            <span class="font-medium ${getPriorityClass(p.priority)}">Priority: ${p.priority}</span>
-                        </div>
-                        <div class="mt-3">
-                            <div class="flex justify-between text-sm text-gray-600 mb-1">
-                                <span>Progress</span><span>${p.progress}%</span>
+                    <div class="flex items-start space-x-3 flex-1">
+                        ${chevronIcon}
+                        <div class="flex-1">
+                            <div class="flex items-center space-x-3">
+                                <h3 class="text-lg font-semibold text-gray-800">${p.name}</h3>
+                                <span class="px-3 py-1 rounded-full text-xs font-medium border ${statusClass}">${p.status}</span>
+                                ${p.jiraKey ? `<button onclick="event.stopPropagation(); openJiraModal('${p.jiraKey}', '${p.name}')" class="px-2 py-1 bg-blue-50 text-blue-700 text-xs rounded border border-blue-200 hover:bg-blue-100 font-mono">${p.jiraKey}</button>` : ''}
                             </div>
-                            <div class="w-full bg-gray-200 rounded-full h-2">
-                                <div class="bg-blue-600 h-2 rounded-full" style="width: ${p.progress}%"></div>
+                            <div class="mt-2 flex items-center space-x-4 text-sm text-gray-600">
+                                <span class="flex items-center space-x-1">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path></svg>
+                                    <span>${p.owner}</span>
+                                </span>
+                                <span class="flex items-center space-x-1">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                                    <span>${p.startDate} to ${p.endDate}</span>
+                                </span>
+                                <span class="font-medium ${getPriorityClass(p.priority)}">Priority: ${p.priority}</span>
+                            </div>
+                            <div class="mt-3">
+                                <div class="flex justify-between text-sm text-gray-600 mb-1">
+                                    <span>Progress</span><span>${p.progress}%</span>
+                                </div>
+                                <div class="w-full bg-gray-200 rounded-full h-2">
+                                    <div class="bg-blue-600 h-2 rounded-full transition-all duration-300" style="width: ${p.progress}%"></div>
+                                </div>
                             </div>
                         </div>
                     </div>
-                    <button onclick="openProjectModal(${p.id})" class="ml-4 p-2 text-gray-600 hover:bg-gray-100 rounded">
+                    <button onclick="event.stopPropagation(); openProjectModal(${p.id})" class="ml-4 p-2 text-gray-600 hover:bg-gray-100 rounded">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path></svg>
                     </button>
                 </div>
             </div>
-            <div class="px-4 pb-4 border-t border-gray-200 bg-gray-50 mt-2 pt-4">
-                <div class="grid grid-cols-3 gap-4">
-                    <div class="bg-white rounded-lg p-3 border border-gray-200">
-                        <h4 class="font-medium text-gray-700 mb-2">Budget</h4>
-                        <p class="text-sm">Budget: <span class="font-semibold">$${p.budget.toLocaleString()}</span></p>
-                        <p class="text-sm">Spent: <span class="font-semibold">$${p.spent.toLocaleString()}</span></p>
-                        <div class="w-full bg-gray-200 rounded-full h-2 mt-2">
-                            <div class="${budgetPct > 100 ? 'bg-red-600' : 'bg-green-600'} h-2 rounded-full" style="width: ${Math.min(budgetPct, 100)}%"></div>
-                        </div>
-                        <button onclick="openExpenseModal(${p.id})" class="mt-2 w-full px-3 py-1 text-sm bg-blue-50 text-blue-700 rounded hover:bg-blue-100">Manage Expenses</button>
-                    </div>
-                    <div class="bg-white rounded-lg p-3 border border-gray-200">
-                        <div class="flex justify-between items-center mb-2">
-                            <h4 class="font-medium text-gray-700">Team</h4>
-                            <button onclick="openTaskModal(${p.id})" class="text-sm text-blue-600 hover:text-blue-700">Manage</button>
-                        </div>
-                        ${p.tasks.length > 0 ? p.tasks.map(t => `<div class="flex justify-between text-sm"><span>${t.engineer}</span><span class="font-medium">${t.hoursPerWeek} hrs/wk</span></div>`).join('') : '<p class="text-sm text-gray-500 italic">No assignments</p>'}
-                    </div>
-                    <div class="bg-white rounded-lg p-3 border border-gray-200">
-                        <div class="flex justify-between items-center mb-2">
-                            <h4 class="font-medium text-gray-700">Milestones</h4>
-                            <button onclick="openMilestoneModal(${p.id})" class="text-sm text-blue-600 hover:text-blue-700">Manage</button>
-                        </div>
-                        ${p.milestones.length > 0 ? p.milestones.slice(0, 3).map(m => `
-                            <div class="flex items-center space-x-2 text-sm">
-                                <span class="${m.status === 'completed' ? 'text-green-600' : m.status === 'at-risk' ? 'text-yellow-600' : 'text-gray-400'}">●</span>
-                                <span>${m.name}</span>
+            ${isExpanded ? `
+            <div class="px-4 pb-4 border-t border-gray-200 bg-gray-50">
+                <div class="mt-4 space-y-3">
+                    <div>
+                        <h4 class="font-medium text-gray-700 mb-2">Budget & Spending:</h4>
+                        <div class="bg-white rounded-lg p-3 border border-gray-200">
+                            <div class="flex justify-between items-center mb-2">
+                                <div>
+                                    <p class="text-sm text-gray-600">Budget: <span class="font-semibold text-gray-800">$${p.budget.toLocaleString()}</span></p>
+                                    <p class="text-sm text-gray-600">Spent: <span class="font-semibold text-gray-800">$${p.spent.toLocaleString()}</span></p>
+                                    <p class="text-sm text-gray-600">Remaining: <span class="font-semibold ${p.budget - p.spent < 0 ? 'text-red-600' : 'text-green-600'}">$${(p.budget - p.spent).toLocaleString()}</span></p>
+                                </div>
+                                <div class="text-right">
+                                    <p class="text-2xl font-bold text-gray-800">${budgetPct}%</p>
+                                    <p class="text-xs text-gray-500">of budget</p>
+                                </div>
                             </div>
-                        `).join('') : '<p class="text-sm text-gray-500 italic">No milestones</p>'}
+                            <div class="w-full bg-gray-200 rounded-full h-2 mt-2">
+                                <div class="${p.spent > p.budget * 1.1 ? 'bg-red-600' : p.spent > p.budget ? 'bg-yellow-500' : 'bg-green-600'} h-2 rounded-full transition-all duration-300" style="width: ${Math.min(budgetPct, 100)}%"></div>
+                            </div>
+                            <button onclick="event.stopPropagation(); openExpenseModal(${p.id})" class="mt-2 w-full px-3 py-1 text-sm bg-blue-50 text-blue-700 rounded hover:bg-blue-100">Manage Expenses</button>
+                        </div>
+                    </div>
+                    ${p.notes ? `
+                    <div>
+                        <h4 class="font-medium text-gray-700 mb-2">Latest Update:</h4>
+                        <p class="text-gray-600">${p.notes}</p>
+                    </div>` : ''}
+                    ${changeHistoryHtml}
+                    <div>
+                        <div class="flex justify-between items-center mb-2">
+                            <h4 class="font-medium text-gray-700">Team Assignments:</h4>
+                            <button onclick="event.stopPropagation(); openTaskModal(${p.id})" class="text-sm text-blue-600 hover:text-blue-700">Manage Assignments</button>
+                        </div>
+                        ${p.tasks.length > 0 ? `
+                        <div class="space-y-1">
+                            ${p.tasks.map(task => `
+                                <div class="flex justify-between text-sm">
+                                    <span class="text-gray-600">${task.engineer}</span>
+                                    <span class="font-medium text-gray-800">${task.hoursPerWeek} hrs/week</span>
+                                </div>
+                            `).join('')}
+                        </div>` : '<p class="text-sm text-gray-500 italic">No team members assigned yet</p>'}
+                    </div>
+                    <div>
+                        <div class="flex justify-between items-center mb-2">
+                            <h4 class="font-medium text-gray-700">Milestones:</h4>
+                            <button onclick="event.stopPropagation(); openMilestoneModal(${p.id})" class="text-sm text-blue-600 hover:text-blue-700">Manage Milestones</button>
+                        </div>
+                        ${p.milestones.length > 0 ? `
+                        <div class="space-y-1">
+                            ${p.milestones.map(milestone => `
+                                <div class="flex items-center space-x-2 text-sm">
+                                    ${milestone.status === 'completed' ? '<svg class="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>' : milestone.status === 'at-risk' ? '<svg class="w-4 h-4 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>' : '<svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>'}
+                                    <span class="text-gray-700">${milestone.name}</span>
+                                    <span class="text-gray-500">(${milestone.plannedDate})</span>
+                                </div>
+                            `).join('')}
+                        </div>` : `
+                        <button onclick="event.stopPropagation(); openMilestoneModal(${p.id})" class="w-full px-3 py-2 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200">Add Milestones</button>`}
                     </div>
                 </div>
-                ${p.notes ? `<div class="mt-3"><h4 class="font-medium text-gray-700">Notes:</h4><p class="text-gray-600 text-sm">${p.notes}</p></div>` : ''}
-            </div>
+            </div>` : ''}
         </div>
     `;
 }
@@ -538,8 +681,9 @@ function updateTaskDisplay() {
         list.innerHTML = '<p class="text-gray-500 text-center py-6">No team members assigned yet</p>';
         summary.classList.add('hidden');
     } else {
-        list.innerHTML = p.tasks.map(t => {
+        list.innerHTML = p.tasks.map((t, idx) => {
             const eng = engineers.find(e => e.name === t.engineer);
+            const capacityPct = eng ? Math.round((t.hoursPerWeek / eng.totalHours) * 100) : 0;
             return `
                 <div class="p-3 bg-gray-50 rounded-lg border border-gray-200">
                     <div class="flex items-center justify-between mb-2">
@@ -549,10 +693,15 @@ function updateTaskDisplay() {
                         </div>
                         <div class="text-right mr-3">
                             <p class="text-lg font-bold text-gray-800">${t.hoursPerWeek} hrs/week</p>
+                            <p class="text-xs text-gray-500">${capacityPct}% of capacity</p>
                         </div>
                         <button onclick="deleteTask(${t.id})" class="p-2 text-red-600 hover:bg-red-50 rounded">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
                         </button>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <input type="number" id="edit-hours-${t.id}" value="${t.hoursPerWeek}" min="0" max="40" class="flex-1 px-3 py-1 text-sm border border-gray-300 rounded">
+                        <button onclick="updateTaskHours(${t.id})" class="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Update</button>
                     </div>
                 </div>
             `;
@@ -562,6 +711,30 @@ function updateTaskDisplay() {
         document.getElementById('task-total-hours').textContent = `${totalHours} hrs/week`;
         document.getElementById('task-member-count').textContent = p.tasks.length;
         summary.classList.remove('hidden');
+    }
+}
+
+async function updateTaskHours(taskId) {
+    const projectId = document.getElementById('task-project-id').value;
+    const newHours = parseInt(document.getElementById(`edit-hours-${taskId}`).value) || 0;
+    
+    if (newHours <= 0) {
+        showToast('Hours must be greater than 0', 'error');
+        return;
+    }
+    
+    try {
+        await fetch(`${API}/api/tasks/${taskId}`, { 
+            method: 'PUT', 
+            headers: {'Content-Type': 'application/json'}, 
+            body: JSON.stringify({ hoursPerWeek: newHours }) 
+        });
+        await loadData();
+        currentProject = projects.find(p => p.id == projectId);
+        updateTaskDisplay();
+        showToast('Hours updated', 'success');
+    } catch (err) {
+        showToast('Failed to update hours', 'error');
     }
 }
 
@@ -609,15 +782,132 @@ async function deleteTask(id) {
 
 function renderRoadmap() {
     const container = document.getElementById('content-roadmap');
+    const currentYear = new Date().getFullYear();
+    const yearOptions = [currentYear - 1, currentYear, currentYear + 1, currentYear + 2, currentYear + 3, currentYear + 4];
+    const uniqueOwners = [...new Set(projects.map(p => p.owner).filter(Boolean))];
+    const priorities = ['Critical', 'High', 'Medium', 'Low'];
+    const statuses = ['On Track', 'At Risk', 'Behind', 'Planned', 'Completed', 'Cancelled'];
+    const hasActiveFilters = ownerFilter !== 'all' || priorityFilter !== 'all' || statusFilter !== 'all';
+    const filteredProjects = getFilteredProjects();
+    
     container.innerHTML = `
-        <h2 class="text-2xl font-bold text-gray-800 mb-4">Project Roadmap</h2>
-        <div class="bg-white rounded-lg shadow-md p-4 mb-4">
-            <h3 class="text-lg font-semibold text-gray-800 mb-4">Project Timeline</h3>
-            <div class="chart-container"><canvas id="gantt-chart"></canvas></div>
+        <div class="flex justify-between items-center mb-4">
+            <h2 class="text-2xl font-bold text-gray-800">Project Roadmap</h2>
+            <button onclick="openProjectModal()" class="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                <span>Add Planned Project</span>
+            </button>
         </div>
-        <div class="bg-white rounded-lg shadow-md p-4">
-            <h3 class="text-lg font-semibold text-gray-800 mb-4">Team Capacity Forecast</h3>
+        
+        <!-- Filters -->
+        <div class="bg-white rounded-lg shadow-md p-4 mb-4">
+            <div class="flex items-center space-x-4 mb-4">
+                <svg class="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"></path></svg>
+                <span class="font-medium text-gray-700">Filters:</span>
+                ${hasActiveFilters ? `<button onclick="clearFilters(); renderRoadmap();" class="text-sm text-blue-600 hover:text-blue-700">Clear Filters</button>` : ''}
+                <span class="text-sm text-gray-600">Showing ${filteredProjects.length} of ${projects.length} projects</span>
+            </div>
+            <div class="grid grid-cols-3 gap-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Owner</label>
+                    <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleOwnerFilter(this.value); renderRoadmap();">
+                        <option value="all" ${ownerFilter === 'all' ? 'selected' : ''}>All Owners</option>
+                        ${uniqueOwners.map(owner => `<option value="${owner}" ${ownerFilter === owner ? 'selected' : ''}>${owner}</option>`).join('')}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Priority</label>
+                    <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handlePriorityFilter(this.value); renderRoadmap();">
+                        <option value="all" ${priorityFilter === 'all' ? 'selected' : ''}>All Priorities</option>
+                        ${priorities.map(p => `<option value="${p}" ${priorityFilter === p ? 'selected' : ''}>${p}</option>`).join('')}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Status</label>
+                    <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleStatusFilter(this.value); renderRoadmap();">
+                        <option value="all" ${statusFilter === 'all' ? 'selected' : ''}>All Statuses</option>
+                        ${statuses.map(s => `<option value="${s}" ${statusFilter === s ? 'selected' : ''}>${s}</option>`).join('')}
+                    </select>
+                </div>
+            </div>
+            <div class="mt-4 flex items-center space-x-2">
+                <input type="checkbox" id="showMilestonesToggle" ${showMilestones ? 'checked' : ''} onchange="showMilestones = this.checked; renderRoadmap();" class="rounded">
+                <label for="showMilestonesToggle" class="text-sm font-medium text-gray-700">Show Milestones</label>
+            </div>
+        </div>
+        
+        <!-- Date Range Selector -->
+        <div class="bg-white rounded-lg shadow-md p-4 mb-4">
+            <div class="flex items-center space-x-4 mb-2">
+                <svg class="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                <span class="font-medium text-gray-700">Timeline:</span>
+            </div>
+            <div class="flex items-center space-x-2 flex-wrap gap-2">
+                ${yearOptions.map(year => `
+                    <button onclick="setGanttDateRange('${year}')" class="px-3 py-1 rounded ${ganttDateRange === String(year) ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}">${year}</button>
+                `).join('')}
+                <button onclick="setGanttDateRange('all')" class="px-3 py-1 rounded ${ganttDateRange === 'all' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}">All Time</button>
+                <button onclick="setGanttDateRange('custom')" class="px-3 py-1 rounded ${ganttDateRange === 'custom' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}">Custom</button>
+            </div>
+            ${ganttDateRange === 'custom' ? `
+            <div class="mt-3 flex items-center space-x-4">
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">Start Date</label>
+                    <input type="date" id="gantt-custom-start" value="${ganttCustomStart}" onchange="ganttCustomStart = this.value; renderRoadmap();" class="px-3 py-1 border border-gray-300 rounded">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">End Date</label>
+                    <input type="date" id="gantt-custom-end" value="${ganttCustomEnd}" onchange="ganttCustomEnd = this.value; renderRoadmap();" class="px-3 py-1 border border-gray-300 rounded">
+                </div>
+            </div>` : ''}
+        </div>
+        
+        <!-- Gantt Chart -->
+        <div class="bg-white rounded-lg shadow-md p-4 mb-4">
+            <h3 class="text-lg font-semibold text-gray-800 mb-4">
+                Project Timeline - ${ganttDateRange === 'all' ? 'All Time' : ganttDateRange === 'custom' ? 'Custom Range' : ganttDateRange}
+                ${hasActiveFilters ? '<span class="text-sm text-gray-500 ml-2">(Filtered)</span>' : ''}
+            </h3>
+            <div class="chart-container" style="height: ${Math.max(300, filteredProjects.length * 40)}px;"><canvas id="gantt-chart"></canvas></div>
+        </div>
+        
+        <!-- Capacity Chart -->
+        <div class="bg-white rounded-lg shadow-md p-4 mb-4">
+            <h3 class="text-lg font-semibold text-gray-800 mb-4">
+                Team Capacity Forecast
+                ${hasActiveFilters ? '<span class="text-sm text-gray-500 ml-2">(Based on Filtered Projects)</span>' : ''}
+            </h3>
             <div class="chart-container"><canvas id="capacity-chart"></canvas></div>
+        </div>
+        
+        <!-- Projects & Resource Impact -->
+        <div class="bg-white rounded-lg shadow-md p-4">
+            <h3 class="text-lg font-semibold text-gray-800 mb-4">Projects & Resource Impact</h3>
+            <div class="space-y-3">
+                ${filteredProjects.map(project => {
+                    const totalHours = project.tasks.reduce((sum, t) => sum + t.hoursPerWeek, 0);
+                    const ownerTask = project.tasks.find(t => t.engineer === project.owner);
+                    const ownerEng = engineers.find(e => e.name === project.owner);
+                    const ownerCapacity = ownerEng?.totalHours || 40;
+                    const ownerPct = ownerTask ? Math.round((ownerTask.hoursPerWeek / ownerCapacity) * 100) : 0;
+                    
+                    return `
+                    <div class="border border-gray-200 rounded-lg p-3">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <h4 class="font-medium text-gray-800">${project.name}</h4>
+                                <p class="text-sm text-gray-600 mt-1">
+                                    ${totalHours} hours/week total
+                                    ${ownerTask ? ` • ${ownerTask.hoursPerWeek}h from ${project.owner} (${ownerPct}% of capacity)` : ''}
+                                </p>
+                                <p class="text-xs text-gray-500 mt-1">${project.startDate} to ${project.endDate}</p>
+                            </div>
+                            <span class="px-2 py-1 rounded text-xs font-medium ${getStatusClass(project.status)}">${project.status}</span>
+                        </div>
+                    </div>
+                    `;
+                }).join('')}
+            </div>
         </div>
     `;
     
@@ -625,13 +915,24 @@ function renderRoadmap() {
     renderCapacityChart();
 }
 
+function setGanttDateRange(range) {
+    ganttDateRange = range;
+    renderRoadmap();
+}
+
 function renderGanttChart() {
     const ctx = document.getElementById('gantt-chart');
     if (!ctx) return;
     
-    const sortedProjects = [...projects].sort((a, b) => new Date(a.startDate) - new Date(b.startDate));
+    // Destroy previous chart instance to prevent Canvas reuse errors
+    if (ganttChartInstance) {
+        ganttChartInstance.destroy();
+    }
     
-    new Chart(ctx, {
+    const filteredProjects = getFilteredProjects();
+    const sortedProjects = [...filteredProjects].sort((a, b) => new Date(a.startDate) - new Date(b.startDate));
+    
+    ganttChartInstance = new Chart(ctx, {
         type: 'bar',
         data: {
             labels: sortedProjects.map(p => p.name),
@@ -676,9 +977,16 @@ function renderCapacityChart() {
     const ctx = document.getElementById('capacity-chart');
     if (!ctx) return;
     
+    // Destroy previous chart instance
+    if (capacityChartInstance) {
+        capacityChartInstance.destroy();
+    }
+    
+    const filteredProjects = getFilteredProjects();
+    
     const capacityData = engineers.map(eng => {
         const nonProjectTotal = eng.nonProjectTime.reduce((sum, item) => sum + item.hours, 0);
-        const projectHours = projects
+        const projectHours = filteredProjects
             .filter(p => !['Planned', 'Completed', 'Cancelled'].includes(p.status))
             .flatMap(p => p.tasks)
             .filter(t => t.engineer === eng.name)
@@ -687,7 +995,7 @@ function renderCapacityChart() {
         return { name: eng.name, nonProject: nonProjectTotal, project: projectHours, available: Math.max(0, available) };
     });
     
-    new Chart(ctx, {
+    capacityChartInstance = new Chart(ctx, {
         type: 'bar',
         data: {
             labels: capacityData.map(d => d.name),
@@ -711,38 +1019,116 @@ function renderCapacityChart() {
 // ============================================================================
 
 function renderMilestones() {
-    const allMilestones = projects.flatMap(p => p.milestones.map(m => ({ ...m, projectName: p.name, projectId: p.id })));
+    const container = document.getElementById('content-milestones');
+    const currentYear = new Date().getFullYear();
+    const yearOptions = [currentYear - 1, currentYear, currentYear + 1, currentYear + 2, currentYear + 3, currentYear + 4];
+    const hasActiveFilters = ownerFilter !== 'all' || priorityFilter !== 'all' || statusFilter !== 'all';
+    
+    // Get milestones from filtered projects based on date range
+    const filteredProjects = getFilteredProjects();
+    const dateRange = getMilestoneDateRange();
+    
+    const allMilestones = filteredProjects.flatMap(p => p.milestones.map(m => ({ ...m, projectName: p.name, projectId: p.id })))
+        .filter(m => {
+            const mDate = new Date(m.plannedDate);
+            return mDate >= dateRange.start && mDate <= dateRange.end;
+        });
+    
     const completed = allMilestones.filter(m => m.status === 'completed').length;
     const atRisk = allMilestones.filter(m => m.status === 'at-risk').length;
     const overdue = allMilestones.filter(m => m.status !== 'completed' && new Date(m.plannedDate) < new Date()).length;
+    const completionRate = allMilestones.length > 0 ? Math.round((completed / allMilestones.length) * 100) : 0;
     
-    const container = document.getElementById('content-milestones');
+    // Calculate variance
+    const plannedByNow = allMilestones.filter(m => new Date(m.plannedDate) <= new Date()).length;
+    const variance = completed - plannedByNow;
+    
     container.innerHTML = `
         <h2 class="text-2xl font-bold text-gray-800 mb-4">Milestone Tracking</h2>
+        
+        <!-- Date Range Selector -->
+        <div class="bg-white rounded-lg shadow-md p-4 mb-4">
+            <div class="flex items-center space-x-4 mb-2">
+                <svg class="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                <span class="font-medium text-gray-700">Date Range:</span>
+            </div>
+            <div class="flex items-center space-x-2 flex-wrap gap-2">
+                ${yearOptions.map(year => `
+                    <button onclick="setMilestoneDateRange('${year}')" class="px-3 py-1 rounded ${milestoneDateRange === String(year) ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}">${year}</button>
+                `).join('')}
+                <button onclick="setMilestoneDateRange('all')" class="px-3 py-1 rounded ${milestoneDateRange === 'all' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}">All Time</button>
+                <button onclick="setMilestoneDateRange('custom')" class="px-3 py-1 rounded ${milestoneDateRange === 'custom' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}">Custom</button>
+            </div>
+            ${milestoneDateRange === 'custom' ? `
+            <div class="mt-3 flex items-center space-x-4">
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">Start Date</label>
+                    <input type="date" value="${milestoneCustomStart}" onchange="milestoneCustomStart = this.value; renderMilestones();" class="px-3 py-1 border border-gray-300 rounded">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">End Date</label>
+                    <input type="date" value="${milestoneCustomEnd}" onchange="milestoneCustomEnd = this.value; renderMilestones();" class="px-3 py-1 border border-gray-300 rounded">
+                </div>
+            </div>` : ''}
+        </div>
+        
+        <!-- Summary Cards -->
         <div class="grid grid-cols-4 gap-4 mb-6">
             <div class="bg-white rounded-lg shadow-md p-4">
-                <p class="text-sm text-gray-600">Total Milestones</p>
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-sm text-gray-600">Total Milestones</p>
+                        <p class="text-sm text-gray-500">${milestoneDateRange === 'all' ? 'All Time' : milestoneDateRange === 'custom' ? 'Custom' : milestoneDateRange}</p>
+                        ${hasActiveFilters ? '<p class="text-xs text-gray-400">(filtered)</p>' : ''}
+                    </div>
+                    <svg class="w-8 h-8 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                </div>
                 <p class="text-3xl font-bold text-gray-800 mt-2">${allMilestones.length}</p>
             </div>
             <div class="bg-white rounded-lg shadow-md p-4">
-                <p class="text-sm text-gray-600">Completed</p>
-                <p class="text-3xl font-bold text-green-600 mt-2">${completed}</p>
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-sm text-gray-600">Completed</p>
+                    </div>
+                    <svg class="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                </div>
+                <p class="text-3xl font-bold text-green-600 mt-2">${completed} <span class="text-sm text-gray-500">(${completionRate}%)</span></p>
             </div>
             <div class="bg-white rounded-lg shadow-md p-4">
-                <p class="text-sm text-gray-600">At Risk</p>
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-sm text-gray-600">At Risk</p>
+                    </div>
+                    <svg class="w-8 h-8 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                </div>
                 <p class="text-3xl font-bold text-yellow-600 mt-2">${atRisk}</p>
             </div>
             <div class="bg-white rounded-lg shadow-md p-4">
-                <p class="text-sm text-gray-600">Overdue</p>
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-sm text-gray-600">Overdue</p>
+                        <p class="text-xs text-gray-400">Variance: <span class="${variance >= 0 ? 'text-green-600' : 'text-red-600'}">${variance >= 0 ? '+' : ''}${variance}</span></p>
+                    </div>
+                    <svg class="w-8 h-8 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                </div>
                 <p class="text-3xl font-bold text-red-600 mt-2">${overdue}</p>
             </div>
         </div>
+        
+        <!-- Cumulative Milestone Chart -->
+        <div class="bg-white rounded-lg shadow-md p-4 mb-4">
+            <h3 class="text-lg font-semibold text-gray-800 mb-4">Cumulative Milestone Progress</h3>
+            <div class="chart-container" style="height: 250px;"><canvas id="milestone-cumulative-chart"></canvas></div>
+        </div>
+        
+        <!-- All Milestones List -->
         <div class="bg-white rounded-lg shadow-md p-4">
             <h3 class="text-lg font-semibold text-gray-800 mb-4">All Milestones</h3>
             <div class="space-y-2" id="all-milestones-list"></div>
         </div>
     `;
     
+    // Render milestones list
     const list = document.getElementById('all-milestones-list');
     const sorted = allMilestones.sort((a, b) => new Date(a.plannedDate) - new Date(b.plannedDate));
     
@@ -768,6 +1154,91 @@ function renderMilestones() {
             `;
         }).join('');
     }
+    
+    // Render cumulative chart
+    renderMilestoneCumulativeChart(allMilestones, dateRange);
+}
+
+function getMilestoneDateRange() {
+    const currentYear = new Date().getFullYear();
+    if (milestoneDateRange === 'custom') {
+        return {
+            start: milestoneCustomStart ? new Date(milestoneCustomStart + 'T00:00:00') : new Date(`${currentYear}-01-01T00:00:00`),
+            end: milestoneCustomEnd ? new Date(milestoneCustomEnd + 'T23:59:59') : new Date(`${currentYear}-12-31T23:59:59`)
+        };
+    }
+    if (milestoneDateRange === 'all') {
+        return {
+            start: new Date(`${currentYear - 1}-01-01T00:00:00`),
+            end: new Date(`${currentYear + 4}-12-31T23:59:59`)
+        };
+    }
+    const year = parseInt(milestoneDateRange);
+    return {
+        start: new Date(`${year}-01-01T00:00:00`),
+        end: new Date(`${year}-12-31T23:59:59`)
+    };
+}
+
+function setMilestoneDateRange(range) {
+    milestoneDateRange = range;
+    renderMilestones();
+}
+
+function renderMilestoneCumulativeChart(milestones, dateRange) {
+    const ctx = document.getElementById('milestone-cumulative-chart');
+    if (!ctx) return;
+    
+    // Destroy previous chart instance
+    if (milestoneCumulativeChartInstance) {
+        milestoneCumulativeChartInstance.destroy();
+    }
+    
+    // Generate months for the date range
+    const months = [];
+    const start = new Date(dateRange.start);
+    const end = new Date(dateRange.end);
+    for (let d = new Date(start); d <= end; d.setMonth(d.getMonth() + 1)) {
+        months.push(d.toISOString().slice(0, 7));
+    }
+    
+    // Calculate cumulative data
+    const cumulativeData = months.map(month => {
+        const monthEnd = month + '-31';
+        const plannedByMonth = milestones.filter(m => m.plannedDate <= monthEnd).length;
+        const completedByMonth = milestones.filter(m => m.actualDate && m.actualDate <= monthEnd).length;
+        return { month, planned: plannedByMonth, actual: completedByMonth };
+    });
+    
+    milestoneCumulativeChartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: cumulativeData.map(d => d.month),
+            datasets: [{
+                label: 'Planned (Cumulative)',
+                data: cumulativeData.map(d => d.planned),
+                borderColor: 'rgba(59, 130, 246, 1)',
+                backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                fill: true,
+                tension: 0.3
+            }, {
+                label: 'Completed (Cumulative)',
+                data: cumulativeData.map(d => d.actual),
+                borderColor: 'rgba(16, 185, 129, 1)',
+                backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                fill: true,
+                tension: 0.3
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                y: { beginAtZero: true, title: { display: true, text: 'Milestones' } }
+            },
+            plugins: { legend: { display: true } }
+        }
+    });
 }
 
 // ============================================================================
