@@ -12,6 +12,7 @@ let statusFilter = 'all';
 let ownerFilter = 'all';
 let priorityFilter = 'all';
 let expandedProjects = new Set();
+let editingMilestoneId = null;
 
 // Date range selectors
 let ganttDateRange = String(new Date().getFullYear());
@@ -565,33 +566,74 @@ function updateMilestoneDisplay() {
             const isOverdue = !m.actualDate && new Date(m.plannedDate) < new Date();
             const bgClass = m.status === 'completed' ? 'bg-green-50 border-green-200' : (m.status === 'at-risk' || isOverdue) ? 'bg-yellow-50 border-yellow-200' : 'bg-gray-50 border-gray-200';
             const iconClass = m.status === 'completed' ? 'text-green-600' : m.status === 'at-risk' ? 'text-yellow-600' : 'text-gray-400';
+            const isEditing = editingMilestoneId === m.id;
             
-            return `
-                <div class="p-3 rounded-lg border ${bgClass}">
-                    <div class="flex items-center justify-between">
-                        <div class="flex-1">
-                            <div class="flex items-center space-x-2">
-                                <span class="${iconClass}">●</span>
-                                <span class="font-medium text-gray-800">${m.name}</span>
+            if (isEditing) {
+                // Editing mode - show inline form
+                return `
+                    <div class="p-3 rounded-lg border ${bgClass}">
+                        <div class="space-y-2">
+                            <input type="text" id="edit-milestone-name-${m.id}" value="${m.name}" 
+                                class="w-full px-2 py-1 border border-gray-300 rounded text-sm" 
+                                placeholder="Milestone name">
+                            <div class="grid grid-cols-2 gap-2">
+                                <input type="date" id="edit-milestone-date-${m.id}" value="${m.plannedDate}" 
+                                    class="px-2 py-1 border border-gray-300 rounded text-sm">
+                                <select id="edit-milestone-status-${m.id}" 
+                                    class="px-2 py-1 border border-gray-300 rounded text-sm">
+                                    <option value="pending" ${m.status === 'pending' ? 'selected' : ''}>Pending</option>
+                                    <option value="at-risk" ${m.status === 'at-risk' ? 'selected' : ''}>At Risk</option>
+                                    <option value="completed" ${m.status === 'completed' ? 'selected' : ''}>Completed</option>
+                                </select>
                             </div>
-                            <div class="mt-1 ml-4 text-sm text-gray-600">
-                                Planned: ${m.plannedDate}
-                                ${m.actualDate ? `<span class="ml-3">• Completed: ${m.actualDate}</span>` : ''}
-                                ${isOverdue && !m.actualDate ? '<span class="ml-3 text-red-600 font-medium">• OVERDUE</span>' : ''}
+                            <div class="flex space-x-2">
+                                <button onclick="saveMilestoneEdit(${m.id})" 
+                                    class="flex-1 px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700">
+                                    Save
+                                </button>
+                                <button onclick="cancelMilestoneEdit()" 
+                                    class="flex-1 px-3 py-1 text-xs bg-gray-300 text-gray-700 rounded hover:bg-gray-400">
+                                    Cancel
+                                </button>
                             </div>
-                        </div>
-                        <div class="flex items-center space-x-2">
-                            ${m.status !== 'completed' ? `
-                                <button onclick="updateMilestoneStatus(${m.id}, 'completed')" class="px-3 py-1 text-xs bg-green-100 text-green-800 rounded hover:bg-green-200">Complete</button>
-                                ${m.status !== 'at-risk' ? `<button onclick="updateMilestoneStatus(${m.id}, 'at-risk')" class="px-3 py-1 text-xs bg-yellow-100 text-yellow-800 rounded hover:bg-yellow-200">At Risk</button>` : ''}
-                            ` : ''}
-                            <button onclick="deleteMilestone(${m.id})" class="p-2 text-red-600 hover:bg-red-50 rounded">
-                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
-                            </button>
                         </div>
                     </div>
-                </div>
-            `;
+                `;
+            } else {
+                // View mode - show milestone with edit button
+                return `
+                    <div class="p-3 rounded-lg border ${bgClass}">
+                        <div class="flex items-center justify-between">
+                            <div class="flex-1">
+                                <div class="flex items-center space-x-2">
+                                    <span class="${iconClass}">●</span>
+                                    <span class="font-medium text-gray-800">${m.name}</span>
+                                </div>
+                                <div class="mt-1 ml-4 text-sm text-gray-600">
+                                    Planned: ${m.plannedDate}
+                                    ${m.actualDate ? `<span class="ml-3">• Completed: ${m.actualDate}</span>` : ''}
+                                    ${isOverdue && !m.actualDate ? '<span class="ml-3 text-red-600 font-medium">• OVERDUE</span>' : ''}
+                                </div>
+                            </div>
+                            <div class="flex items-center space-x-2">
+                                ${m.status !== 'completed' ? `
+                                    <button onclick="updateMilestoneStatus(${m.id}, 'completed')" class="px-3 py-1 text-xs bg-green-100 text-green-800 rounded hover:bg-green-200">Complete</button>
+                                    ${m.status !== 'at-risk' ? `<button onclick="updateMilestoneStatus(${m.id}, 'at-risk')" class="px-3 py-1 text-xs bg-yellow-100 text-yellow-800 rounded hover:bg-yellow-200">At Risk</button>` : ''}
+                                ` : ''}
+                                <button onclick="editMilestone(${m.id})" 
+                                    class="p-2 text-blue-600 hover:bg-blue-50 rounded" title="Edit milestone">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path>
+                                    </svg>
+                                </button>
+                                <button onclick="deleteMilestone(${m.id})" class="p-2 text-red-600 hover:bg-red-50 rounded">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
         }).join('');
     }
 }
@@ -648,10 +690,56 @@ async function deleteMilestone(id) {
         await fetch(`${API}/api/milestones/${id}`, { method: 'DELETE' });
         await loadData();
         currentProject = projects.find(p => p.id == projectId);
+        editingMilestoneId = null;
         updateMilestoneDisplay();
         showToast('Milestone deleted', 'success');
     } catch (err) {
         showToast('Failed to delete milestone', 'error');
+    }
+}
+
+function editMilestone(id) {
+    editingMilestoneId = id;
+    updateMilestoneDisplay();
+}
+
+function cancelMilestoneEdit() {
+    editingMilestoneId = null;
+    updateMilestoneDisplay();
+}
+
+async function saveMilestoneEdit(id) {
+    const projectId = document.getElementById('milestone-project-id').value;
+    const name = document.getElementById(`edit-milestone-name-${id}`).value;
+    const plannedDate = document.getElementById(`edit-milestone-date-${id}`).value;
+    const status = document.getElementById(`edit-milestone-status-${id}`).value;
+    
+    if (!name || !plannedDate) {
+        showToast('Please fill in name and date', 'error');
+        return;
+    }
+    
+    const data = {
+        name: name,
+        plannedDate: plannedDate,
+        status: status,
+        actualDate: status === 'completed' ? new Date().toISOString().split('T')[0] : null
+    };
+    
+    try {
+        await fetch(`${API}/api/milestones/${id}`, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data)
+        });
+        
+        await loadData();
+        currentProject = projects.find(p => p.id == projectId);
+        editingMilestoneId = null;
+        updateMilestoneDisplay();
+        showToast('Milestone updated', 'success');
+    } catch (err) {
+        showToast('Failed to update milestone', 'error');
     }
 }
 
@@ -1138,21 +1226,38 @@ function renderMilestones() {
         list.innerHTML = sorted.map(m => {
             const isOverdue = m.status !== 'completed' && new Date(m.plannedDate) < new Date();
             const bgClass = m.status === 'completed' ? 'bg-green-50 border-green-200' : (m.status === 'at-risk' || isOverdue) ? 'bg-yellow-50 border-yellow-200' : 'bg-gray-50 border-gray-200';
+            
+            // Build action buttons based on status
+            let actionButtons = '';
+            if (m.status !== 'completed') {
+                actionButtons = `
+                    <div class="flex items-center space-x-2">
+                        ${m.status !== 'at-risk' ? `<button onclick="updateMilestoneStatusFromTab(${m.id}, ${m.projectId}, 'at-risk')" class="px-3 py-1 text-xs bg-yellow-100 text-yellow-800 rounded hover:bg-yellow-200">Mark At Risk</button>` : ''}
+                        <button onclick="updateMilestoneStatusFromTab(${m.id}, ${m.projectId}, 'completed')" class="px-3 py-1 text-xs bg-green-100 text-green-800 rounded hover:bg-green-200">Complete</button>
+                    </div>
+                `;
+            }
+            
             return `
                 <div class="p-3 rounded-lg border ${bgClass}">
                     <div class="flex items-center justify-between">
-                        <div>
-                            <span class="font-medium text-gray-800">${m.name}</span>
-                            <span class="text-sm text-gray-500 ml-2">- ${m.projectName}</span>
+                        <div class="flex items-center space-x-3 flex-1">
+                            ${m.status === 'completed' ? '<svg class="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>' : (m.status === 'at-risk' || isOverdue) ? '<svg class="w-5 h-5 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>' : '<svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>'}
+                            <div class="flex-1">
+                                <span class="font-medium text-gray-800">${m.name}</span>
+                                <p class="text-sm text-gray-600">
+                                    ${m.projectName} • Planned: ${m.plannedDate}
+                                    ${m.actualDate ? ` • Completed: ${m.actualDate}` : ''}
+                                    ${isOverdue && !m.actualDate ? ' • <span class="text-red-600 font-medium">OVERDUE</span>' : ''}
+                                </p>
+                            </div>
                         </div>
-                        <div class="flex items-center space-x-4">
-                            <span class="text-sm text-gray-600">${m.plannedDate}</span>
-                            <span class="px-2 py-1 text-xs rounded ${m.status === 'completed' ? 'bg-green-100 text-green-800' : m.status === 'at-risk' ? 'bg-yellow-100 text-yellow-800' : 'bg-gray-100 text-gray-800'}">${m.status}</span>
-                        </div>
+                        ${actionButtons}
                     </div>
                 </div>
             `;
         }).join('');
+
     }
     
     // Render cumulative chart
