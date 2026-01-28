@@ -868,13 +868,12 @@ def proxy_ignition_generic():
     Generic proxy endpoint for any Ignition API path.
     
     Query Parameter (required):
-        - path: The API path to call (e.g., '/ops/jira', '/module/counts')
+        - path: The API path to call (e.g., '/ops/jira')
     
     All other query parameters and body content are forwarded to Ignition.
     
     Examples:
         GET /api/ignition/proxy?path=/ops/jira
-        GET /api/ignition/proxy?path=/module/counts&line=1
         POST /api/ignition/proxy?path=/ops/note  with JSON body
     """
     # Get the target path

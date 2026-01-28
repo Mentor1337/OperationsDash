@@ -16,12 +16,14 @@ let editingMilestoneId = null;
 
 // Date range selectors
 let ganttDateRange = String(new Date().getFullYear());
-let milestoneDateRange = String(new Date().getFullYear());
-let capacityDateRange = String(new Date().getFullYear());
 let ganttCustomStart = '';
 let ganttCustomEnd = '';
+let milestoneDateRange = String(new Date().getFullYear());
 let milestoneCustomStart = '';
 let milestoneCustomEnd = '';
+let resourceDateRange = String(new Date().getFullYear());
+let resourceCustomStart = '';
+let resourceCustomEnd = '';
 let capacityCustomStart = '';
 let capacityCustomEnd = '';
 let showMilestones = true;
@@ -1008,6 +1010,11 @@ function setGanttDateRange(range) {
     renderRoadmap();
 }
 
+function setResourceDateRange(range) {
+    resourceDateRange = range;
+    renderResources();
+}
+
 function renderGanttChart() {
     const ctx = document.getElementById('gantt-chart');
     if (!ctx) return;
@@ -1017,7 +1024,32 @@ function renderGanttChart() {
         ganttChartInstance.destroy();
     }
     
-    const filteredProjects = getFilteredProjects();
+    // Get date range based on ganttDateRange selection
+    let startDate, endDate;
+    const currentYear = new Date().getFullYear();
+    
+    if (ganttDateRange === 'all') {
+        // Show all projects - use very wide date range
+        startDate = new Date('2020-01-01');
+        endDate = new Date('2030-12-31');
+    } else if (ganttDateRange === 'custom') {
+        startDate = ganttCustomStart ? new Date(ganttCustomStart) : new Date(`${currentYear}-01-01`);
+        endDate = ganttCustomEnd ? new Date(ganttCustomEnd) : new Date(`${currentYear}-12-31`);
+    } else {
+        // Specific year selected
+        const year = parseInt(ganttDateRange);
+        startDate = new Date(`${year}-01-01`);
+        endDate = new Date(`${year}-12-31`);
+    }
+    
+    // Filter projects by owner/priority/status AND date range
+    const filteredProjects = getFilteredProjects().filter(p => {
+        const pStart = new Date(p.startDate);
+        const pEnd = new Date(p.endDate);
+        // Include project if it overlaps with the selected date range
+        return pStart <= endDate && pEnd >= startDate;
+    });
+    
     const sortedProjects = [...filteredProjects].sort((a, b) => new Date(a.startDate) - new Date(b.startDate));
     
     ganttChartInstance = new Chart(ctx, {
@@ -1365,6 +1397,18 @@ function renderResources() {
         return { ...eng, nonProjectTotal, projectHours, available, utilization };
     });
     
+    // Calculate summary metrics
+    const totalCapacity = engineers.reduce((sum, e) => sum + e.totalHours, 0);
+    const totalAvailable = capacityData.reduce((sum, e) => sum + e.available, 0);
+    const avgUtilization = capacityData.length > 0 
+        ? Math.round(capacityData.reduce((sum, e) => sum + e.utilization, 0) / capacityData.length) 
+        : 0;
+    const overloadedCount = capacityData.filter(e => e.utilization > 100).length;
+    
+    // Year options for date range selector
+    const currentYear = new Date().getFullYear();
+    const yearOptions = [currentYear - 1, currentYear, currentYear + 1, currentYear + 2, currentYear + 3, currentYear + 4];
+    
     container.innerHTML = `
         <div class="flex justify-between items-center mb-4">
             <h2 class="text-2xl font-bold text-gray-800">Resource Management</h2>
@@ -1373,6 +1417,107 @@ function renderResources() {
                 <span>Add Engineer</span>
             </button>
         </div>
+        
+        <!-- Summary Cards -->
+        <div class="grid grid-cols-3 gap-4 mb-6">
+            <div class="bg-white rounded-lg shadow-md p-4">
+                <div class="flex items-center justify-between">
+                    <p class="text-sm text-gray-600">Team Capacity</p>
+                    <svg class="w-8 h-8 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path>
+                    </svg>
+                </div>
+                <p class="text-3xl font-bold text-gray-800 mt-2">${totalCapacity}h</p>
+                <p class="text-sm text-gray-500 mt-1">${totalAvailable}h available</p>
+            </div>
+            <div class="bg-white rounded-lg shadow-md p-4">
+                <div class="flex items-center justify-between">
+                    <p class="text-sm text-gray-600">Avg Utilization</p>
+                    <svg class="w-8 h-8 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path>
+                    </svg>
+                </div>
+                <p class="text-3xl font-bold text-gray-800 mt-2">${avgUtilization}%</p>
+                <p class="text-sm text-gray-500 mt-1">Across team</p>
+            </div>
+            <div class="bg-white rounded-lg shadow-md p-4">
+                <div class="flex items-center justify-between">
+                    <p class="text-sm text-gray-600">Overloaded</p>
+                    <svg class="w-8 h-8 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                    </svg>
+                </div>
+                <p class="text-3xl font-bold text-gray-800 mt-2">${overloadedCount}</p>
+                <p class="text-sm text-gray-500 mt-1">Engineer${overloadedCount !== 1 ? 's' : ''}</p>
+            </div>
+            </div>
+        </div>
+        
+        <!-- Date Range Selector for Capacity Charts -->
+        <div class="bg-white rounded-lg shadow-md p-4 mb-4">
+            <div class="flex items-center space-x-4 mb-2">
+                <svg class="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                <span class="font-medium text-gray-700">Capacity Timeline:</span>
+            </div>
+            <div class="flex items-center space-x-2 flex-wrap gap-2">
+                ${yearOptions.map(year => `
+                    <button onclick="setResourceDateRange('${year}')" class="px-3 py-1 rounded ${resourceDateRange === String(year) ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}">${year}</button>
+                `).join('')}
+                <button onclick="setResourceDateRange('all')" class="px-3 py-1 rounded ${resourceDateRange === 'all' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}">All Time</button>
+                <button onclick="setResourceDateRange('custom')" class="px-3 py-1 rounded ${resourceDateRange === 'custom' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}">Custom</button>
+            </div>
+            ${resourceDateRange === 'custom' ? `
+            <div class="mt-3 flex items-center space-x-4">
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">Start Date</label>
+                    <input type="date" id="resource-custom-start" value="${resourceCustomStart}" onchange="resourceCustomStart = this.value; renderResources();" class="px-3 py-1 border border-gray-300 rounded">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">End Date</label>
+                    <input type="date" id="resource-custom-end" value="${resourceCustomEnd}" onchange="resourceCustomEnd = this.value; renderResources();" class="px-3 py-1 border border-gray-300 rounded">
+                </div>
+            </div>` : ''}
+        </div>
+        
+        <!-- Current Week Capacity Chart -->
+        <div class="bg-white rounded-lg shadow-md p-4 mb-4">
+            <h3 class="text-lg font-semibold text-gray-800 mb-4">Current Week Capacity</h3>
+            <div class="chart-container"><canvas id="current-capacity-chart"></canvas></div>
+        </div>
+        
+        <!-- Team Capacity Over Time Chart -->
+        <div class="bg-white rounded-lg shadow-md p-4 mb-4">
+            <h3 class="text-lg font-semibold text-gray-800 mb-4">Team Capacity Allocation Over Time - ${resourceDateRange === 'all' ? 'All Years' : resourceDateRange === 'custom' ? 'Custom Range' : resourceDateRange}</h3>
+            <div class="chart-container"><canvas id="team-capacity-chart"></canvas></div>
+        </div>
+        
+        <!-- Individual Utilization Trends Chart -->
+        <div class="bg-white rounded-lg shadow-md p-4 mb-4">
+            <h3 class="text-lg font-semibold text-gray-800 mb-4">Individual Capacity Utilization Trends - ${resourceDateRange === 'all' ? 'All Years' : resourceDateRange === 'custom' ? 'Custom Range' : resourceDateRange}</h3>
+            <div class="chart-container"><canvas id="individual-trends-chart"></canvas></div>
+        </div>
+        
+        <!-- Monthly Breakdown Table -->
+        <div class="bg-white rounded-lg shadow-md p-4 mb-4">
+            <h3 class="text-lg font-semibold text-gray-800 mb-4">Monthly Breakdown by Engineer - ${resourceDateRange === 'all' ? 'All Years' : resourceDateRange === 'custom' ? 'Custom Range' : resourceDateRange}</h3>
+            <div class="overflow-x-auto">
+                <table class="min-w-full text-sm">
+                    <thead>
+                        <tr class="border-b border-gray-300">
+                            <th class="text-left p-2 font-semibold">Engineer</th>
+                            ${Array.from({length: 12}, (_, i) => {
+                                const month = new Date(new Date().getFullYear(), i, 1).toLocaleDateString('en-US', { year: 'numeric', month: '2-digit' });
+                                return `<th class="text-center p-2 font-semibold whitespace-nowrap">${month}</th>`;
+                            }).join('')}
+                        </tr>
+                    </thead>
+                    <tbody id="monthly-breakdown-tbody">
+                    </tbody>
+                </table>
+            </div>
+            <p class="text-xs text-gray-500 mt-3">P = Project hours, NP = Non-Project hours, A = Available hours</p>
+        </div>
+        
         <div class="grid grid-cols-2 gap-4">
             ${capacityData.map(eng => `
                 <div class="bg-white rounded-lg shadow-md p-4">
@@ -1408,6 +1553,404 @@ function renderResources() {
                 </div>
             `).join('')}
         </div>
+    `;
+    
+    // Render the charts after DOM is updated
+    setTimeout(() => {
+        renderCurrentCapacityChart();
+        renderTeamCapacityOverTime();
+        renderIndividualTrendsChart();
+        renderMonthlyBreakdownTable();
+    }, 0);
+}
+
+let currentCapacityChartInstance = null;
+let teamCapacityChartInstance = null;
+let individualTrendsChartInstance = null;
+
+function renderCurrentCapacityChart() {
+    const ctx = document.getElementById('current-capacity-chart');
+    if (!ctx) return;
+    
+    if (currentCapacityChartInstance) {
+        currentCapacityChartInstance.destroy();
+    }
+    
+    const capacityData = engineers.map(eng => {
+        const nonProjectTotal = eng.nonProjectTime.reduce((sum, item) => sum + item.hours, 0);
+        const projectHours = projects
+            .filter(p => !['Planned', 'Completed', 'Cancelled'].includes(p.status))
+            .flatMap(p => p.tasks)
+            .filter(t => t.engineer === eng.name)
+            .reduce((sum, t) => sum + t.hoursPerWeek, 0);
+        const available = eng.totalHours - nonProjectTotal - projectHours;
+        return {
+            name: eng.name,
+            nonProject: nonProjectTotal,
+            project: projectHours,
+            available: Math.max(0, available)
+        };
+    });
+    
+    currentCapacityChartInstance = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: capacityData.map(e => e.name),
+            datasets: [
+                {
+                    label: 'Non-Project Time',
+                    data: capacityData.map(e => e.nonProject),
+                    backgroundColor: '#94a3b8'
+                },
+                {
+                    label: 'Project Work',
+                    data: capacityData.map(e => e.project),
+                    backgroundColor: '#3b82f6'
+                },
+                {
+                    label: 'Available',
+                    data: capacityData.map(e => e.available),
+                    backgroundColor: '#10b981'
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                x: { stacked: true },
+                y: {
+                    stacked: true,
+                    title: { display: true, text: 'Hours/Week' }
+                }
+            }
+        }
+    });
+}
+
+function renderTeamCapacityOverTime() {
+    const ctx = document.getElementById('team-capacity-chart');
+    if (!ctx) return;
+    
+    if (teamCapacityChartInstance) {
+        teamCapacityChartInstance.destroy();
+    }
+    
+    // Calculate date range based on resourceDateRange
+    const currentYear = new Date().getFullYear();
+    let startYear, endYear;
+    
+    if (resourceDateRange === 'all') {
+        startYear = currentYear - 1;
+        endYear = currentYear + 4;
+    } else if (resourceDateRange === 'custom') {
+        if (!resourceCustomStart || !resourceCustomEnd) {
+            // Default to current year if custom dates not set
+            startYear = endYear = currentYear;
+        } else {
+            startYear = new Date(resourceCustomStart).getFullYear();
+            endYear = new Date(resourceCustomEnd).getFullYear();
+        }
+    } else {
+        // Specific year selected
+        startYear = endYear = parseInt(resourceDateRange);
+    }
+    
+    const monthlyData = [];
+    
+    // Generate data for all months in the selected year range
+    for (let year = startYear; year <= endYear; year++) {
+        for (let month = 0; month < 12; month++) {
+            const monthStart = new Date(year, month, 1);
+            const monthEnd = new Date(year, month + 1, 0);
+            const monthKey = monthStart.toLocaleDateString('en-US', { year: 'numeric', month: '2-digit' });
+            
+            let totalNonProject = 0;
+            let totalProject = 0;
+            let totalCapacity = 0;
+            
+            engineers.forEach(eng => {
+                const nonProject = eng.nonProjectTime.reduce((sum, item) => sum + item.hours, 0);
+                const projectHours = projects
+                    .filter(p => {
+                        const pStart = new Date(p.startDate);
+                        const pEnd = new Date(p.endDate);
+                        return pStart <= monthEnd && pEnd >= monthStart;
+                    })
+                    .flatMap(p => p.tasks)
+                    .filter(t => t.engineer === eng.name)
+                    .reduce((sum, t) => sum + t.hoursPerWeek, 0);
+                
+                totalNonProject += nonProject;
+                totalProject += projectHours;
+                totalCapacity += eng.totalHours;
+            });
+            
+            const available = totalCapacity - totalNonProject - totalProject;
+            
+            monthlyData.push({
+                month: monthKey,
+                nonProject: totalNonProject,
+                project: totalProject,
+                available: Math.max(0, available)
+            });
+        }
+    }
+    
+    teamCapacityChartInstance = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: monthlyData.map(m => m.month),
+            datasets: [
+                {
+                    label: 'Non-Project Time',
+                    data: monthlyData.map(m => m.nonProject),
+                    backgroundColor: '#94a3b8'
+                },
+                {
+                    label: 'Project Work',
+                    data: monthlyData.map(m => m.project),
+                    backgroundColor: '#3b82f6'
+                },
+                {
+                    label: 'Available',
+                    data: monthlyData.map(m => m.available),
+                    backgroundColor: '#10b981'
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                x: { 
+                    stacked: true,
+                    ticks: { maxRotation: 45, minRotation: 45 }
+                },
+                y: {
+                    stacked: true,
+                    title: { display: true, text: 'Hours/Week' }
+                }
+            }
+        }
+    });
+}
+
+function renderIndividualTrendsChart() {
+    const ctx = document.getElementById('individual-trends-chart');
+    if (!ctx) return;
+    
+    if (individualTrendsChartInstance) {
+        individualTrendsChartInstance.destroy();
+    }
+    
+    // Calculate date range based on resourceDateRange
+    const currentYear = new Date().getFullYear();
+    let startYear, endYear;
+    
+    if (resourceDateRange === 'all') {
+        startYear = currentYear - 1;
+        endYear = currentYear + 4;
+    } else if (resourceDateRange === 'custom') {
+        if (!resourceCustomStart || !resourceCustomEnd) {
+            startYear = endYear = currentYear;
+        } else {
+            startYear = new Date(resourceCustomStart).getFullYear();
+            endYear = new Date(resourceCustomEnd).getFullYear();
+        }
+    } else {
+        startYear = endYear = parseInt(resourceDateRange);
+    }
+    
+    const months = [];
+    for (let year = startYear; year <= endYear; year++) {
+        for (let month = 0; month < 12; month++) {
+            months.push(new Date(year, month, 1).toLocaleDateString('en-US', { year: 'numeric', month: '2-digit' }));
+        }
+    }
+    
+    const engineerColors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+    
+    const datasets = engineers.map((eng, idx) => {
+        const data = months.map((monthStr, monthIdx) => {
+            const yearMonthParts = monthStr.split('/');
+            const year = parseInt(yearMonthParts[0]);
+            const month = parseInt(yearMonthParts[1]) - 1;
+            const monthStart = new Date(year, month, 1);
+            const monthEnd = new Date(year, month + 1, 0);
+            
+            const nonProject = eng.nonProjectTime.reduce((sum, item) => sum + item.hours, 0);
+            const projectHours = projects
+                .filter(p => {
+                    const pStart = new Date(p.startDate);
+                    const pEnd = new Date(p.endDate);
+                    return pStart <= monthEnd && pEnd >= monthStart;
+                })
+                .flatMap(p => p.tasks)
+                .filter(t => t.engineer === eng.name)
+                .reduce((sum, t) => sum + t.hoursPerWeek, 0);
+            
+            const utilization = ((nonProject + projectHours) / eng.totalHours) * 100;
+            return Math.round(utilization);
+        });
+        
+        return {
+            label: eng.name,
+            data: data,
+            borderColor: engineerColors[idx % engineerColors.length],
+            backgroundColor: engineerColors[idx % engineerColors.length] + '33',
+            tension: 0.1
+        };
+    });
+    
+    individualTrendsChartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: months,
+            datasets: datasets
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                x: {
+                    ticks: { maxRotation: 45, minRotation: 45 }
+                },
+                y: {
+                    min: 0,
+                    max: 120,
+                    title: { display: true, text: 'Utilization %' }
+                }
+            },
+            plugins: {
+                legend: { position: 'bottom' }
+            }
+        }
+    });
+}
+
+function renderMonthlyBreakdownTable() {
+    const tbody = document.getElementById('monthly-breakdown-tbody');
+    if (!tbody) return;
+    
+    // Calculate date range based on resourceDateRange
+    const currentYear = new Date().getFullYear();
+    let startYear, endYear;
+    
+    if (resourceDateRange === 'all') {
+        startYear = currentYear - 1;
+        endYear = currentYear + 4;
+    } else if (resourceDateRange === 'custom') {
+        if (!resourceCustomStart || !resourceCustomEnd) {
+            startYear = endYear = currentYear;
+        } else {
+            startYear = new Date(resourceCustomStart).getFullYear();
+            endYear = new Date(resourceCustomEnd).getFullYear();
+        }
+    } else {
+        startYear = endYear = parseInt(resourceDateRange);
+    }
+    
+    const rows = engineers.map(eng => {
+        const cells = [];
+        
+        for (let year = startYear; year <= endYear; year++) {
+            for (let month = 0; month < 12; month++) {
+                const monthStart = new Date(year, month, 1);
+                const monthEnd = new Date(year, month + 1, 0);
+            
+            const nonProject = eng.nonProjectTime.reduce((sum, item) => sum + item.hours, 0);
+            const projectHours = projects
+                .filter(p => {
+                    const pStart = new Date(p.startDate);
+                    const pEnd = new Date(p.endDate);
+                    return pStart <= monthEnd && pEnd >= monthStart;
+                })
+                .flatMap(p => p.tasks)
+                .filter(t => t.engineer === eng.name)
+                .reduce((sum, t) => sum + t.hoursPerWeek, 0);
+            
+            const available = eng.totalHours - nonProject - projectHours;
+            const utilization = Math.round(((nonProject + projectHours) / eng.totalHours) * 100);
+            
+            const utilizationColor = utilization > 100 ? 'text-red-600' : 
+                                      utilization > 85 ? 'text-yellow-600' : 
+                                      'text-green-600';
+            
+                cells.push(`
+                    <td class="p-2 text-center">
+                        <div class="text-xs">
+                            <div class="text-gray-600">P:${projectHours}</div>
+                            <div class="text-gray-600">NP:${nonProject}</div>
+                            <div class="text-gray-600">A:${available}</div>
+                            <div class="font-semibold mt-1 ${utilizationColor}">${utilization}%</div>
+                        </div>
+                    </td>
+                `);
+            }
+        }
+        
+        return `
+            <tr class="border-b border-gray-200 hover:bg-gray-50">
+                <td class="p-2 font-medium text-gray-800 whitespace-nowrap">${eng.name}</td>
+                ${cells.join('')}
+            </tr>
+        `;
+    });
+    
+    // Add team totals row
+    const totalCells = [];
+    for (let year = startYear; year <= endYear; year++) {
+        for (let month = 0; month < 12; month++) {
+            const monthStart = new Date(year, month, 1);
+            const monthEnd = new Date(year, month + 1, 0);
+        
+        let totalNonProject = 0;
+        let totalProject = 0;
+        let totalCapacity = 0;
+        
+        engineers.forEach(eng => {
+            const nonProject = eng.nonProjectTime.reduce((sum, item) => sum + item.hours, 0);
+            const projectHours = projects
+                .filter(p => {
+                    const pStart = new Date(p.startDate);
+                    const pEnd = new Date(p.endDate);
+                    return pStart <= monthEnd && pEnd >= monthStart;
+                })
+                .flatMap(p => p.tasks)
+                .filter(t => t.engineer === eng.name)
+                .reduce((sum, t) => sum + t.hoursPerWeek, 0);
+            
+            totalNonProject += nonProject;
+            totalProject += projectHours;
+            totalCapacity += eng.totalHours;
+        });
+        
+        const totalAvailable = totalCapacity - totalNonProject - totalProject;
+        const totalUtilization = Math.round(((totalNonProject + totalProject) / totalCapacity) * 100);
+        
+        const utilizationColor = totalUtilization > 100 ? 'text-red-600' : 
+                                  totalUtilization > 85 ? 'text-yellow-600' : 
+                                  'text-green-600';
+        
+            totalCells.push(`
+                <td class="p-2 text-center">
+                    <div class="text-xs">
+                        <div class="text-gray-700">P:${totalProject}</div>
+                        <div class="text-gray-700">NP:${totalNonProject}</div>
+                        <div class="text-gray-700">A:${totalAvailable}</div>
+                        <div class="font-bold mt-1 ${utilizationColor}">${totalUtilization}%</div>
+                    </div>
+                </td>
+            `);
+        }
+    }
+    
+    tbody.innerHTML = rows.join('') + `
+        <tr class="border-t-2 border-gray-400 bg-gray-100 font-semibold">
+            <td class="p-2">TEAM TOTAL</td>
+            ${totalCells.join('')}
+        </tr>
     `;
 }
 
