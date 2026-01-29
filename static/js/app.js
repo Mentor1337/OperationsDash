@@ -1762,22 +1762,24 @@ function renderIndividualTrendsChart() {
         startYear = endYear = parseInt(resourceDateRange);
     }
     
+    // Generate month objects instead of strings to avoid parsing issues
     const months = [];
     for (let year = startYear; year <= endYear; year++) {
         for (let month = 0; month < 12; month++) {
-            months.push(new Date(year, month, 1).toLocaleDateString('en-US', { year: 'numeric', month: '2-digit' }));
+            months.push({
+                year: year,
+                month: month,
+                label: new Date(year, month, 1).toLocaleDateString('en-US', { year: 'numeric', month: '2-digit' })
+            });
         }
     }
     
     const engineerColors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
     
     const datasets = engineers.map((eng, idx) => {
-        const data = months.map((monthStr, monthIdx) => {
-            const yearMonthParts = monthStr.split('/');
-            const year = parseInt(yearMonthParts[0]);
-            const month = parseInt(yearMonthParts[1]) - 1;
-            const monthStart = new Date(year, month, 1);
-            const monthEnd = new Date(year, month + 1, 0);
+        const data = months.map(monthObj => {
+            const monthStart = new Date(monthObj.year, monthObj.month, 1);
+            const monthEnd = new Date(monthObj.year, monthObj.month + 1, 0);
             
             const nonProject = eng.nonProjectTime.reduce((sum, item) => sum + item.hours, 0);
             const projectHours = projects
@@ -1806,7 +1808,7 @@ function renderIndividualTrendsChart() {
     individualTrendsChartInstance = new Chart(ctx, {
         type: 'line',
         data: {
-            labels: months,
+            labels: months.map(m => m.label),
             datasets: datasets
         },
         options: {
