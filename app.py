@@ -4,9 +4,13 @@ from flask import Flask, render_template, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from datetime import datetime, date
+from dotenv import load_dotenv
 import requests
 import os
 import urllib3
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Disable annoying SSL warnings 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -14,27 +18,27 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 app = Flask(__name__)
 CORS(app)
 
-# Conf
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///operations.db'
+# Configuration from environment variables
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URI', 'sqlite:///operations.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SECRET_KEY'] = os.urandom(24)
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', os.urandom(24))
 
 # Power Automate endpoint (one day....)
-POWER_AUTOMATE_URL = os.environ.get('POWER_AUTOMATE_URL', '')
+POWER_AUTOMATE_URL = os.getenv('POWER_AUTOMATE_URL', '')
 
 # Jira Configuration
-JIRA_API_TOKEN = 'ATATT3xFfGF0pybET0NHkDfgqSeLzRmYmFic-oRCHollsHzi-NkMdmSPH-ms6yvqqBgiGhyYAB22IFV1pcrWJOHzdx_XdJ3px0KMIEEZZ9LvfL5kyhWkMtP0TwhI9eNuroGLxxxXuIbcLR2oBtDg7gmulflbFL2paMYEdE-pVMlD-tWu7DsGJFo=D0B5D8A0'
-JIRA_BASE_URL = 'https://projectcolibri.atlassian.net'
-JIRA_API_EXPIRY = '2027-01-20'  # API key expires 
-JIRA_EMAIL = os.environ.get('JIRA_EMAIL', 'twilcox@proterra.com')  # Backup
+JIRA_API_TOKEN = os.getenv('JIRA_API_TOKEN', '')
+JIRA_BASE_URL = os.getenv('JIRA_BASE_URL', 'https://projectcolibri.atlassian.net')
+JIRA_API_EXPIRY = os.getenv('JIRA_API_EXPIRY', '2027-01-20')
+JIRA_EMAIL = os.getenv('JIRA_EMAIL', 'twilcox@proterra.com')
 
 # Ignition API Configuration (air-gapped environment)
-IGNITION_API_BASE_URL = os.environ.get(
+IGNITION_API_BASE_URL = os.getenv(
     'IGNITION_API_BASE_URL', 
     'https://ignitionmes1.mes-greer.proterra.com:8043/system/webdev/HexMES/api/v1'
 )
-IGNITION_API_USERNAME = os.environ.get('IGNITION_API_USERNAME', '')  # Optional
-IGNITION_API_PASSWORD = os.environ.get('IGNITION_API_PASSWORD', '')  # Optional
+IGNITION_API_USERNAME = os.getenv('IGNITION_API_USERNAME', '')
+IGNITION_API_PASSWORD = os.getenv('IGNITION_API_PASSWORD', '')
 
 db = SQLAlchemy(app)
 
