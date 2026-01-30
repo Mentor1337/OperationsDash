@@ -1052,31 +1052,69 @@ function renderGanttChart() {
     
     const sortedProjects = [...filteredProjects].sort((a, b) => new Date(a.startDate) - new Date(b.startDate));
     
+    // Create dataset with floating bars representing project timelines
+    const datasets = sortedProjects.map(p => {
+        const pStart = new Date(p.startDate);
+        const pEnd = new Date(p.endDate);
+        
+        return {
+            label: p.name,
+            data: [{
+                x: [pStart, pEnd],
+                y: p.name
+            }],
+            backgroundColor: getStatusColor(p.status, 0.7),
+            borderColor: getStatusColor(p.status, 1),
+            borderWidth: 2,
+            barThickness: 20
+        };
+    });
+    
     ganttChartInstance = new Chart(ctx, {
         type: 'bar',
         data: {
             labels: sortedProjects.map(p => p.name),
-            datasets: [{
-                label: 'Completed',
-                data: sortedProjects.map(p => p.progress),
-                backgroundColor: sortedProjects.map(p => getStatusColor(p.status, 0.8)),
-                borderWidth: 0
-            }, {
-                label: 'Remaining',
-                data: sortedProjects.map(p => 100 - p.progress),
-                backgroundColor: sortedProjects.map(p => getStatusColor(p.status, 0.3)),
-                borderWidth: 0
-            }]
+            datasets: datasets
         },
         options: {
             indexAxis: 'y',
             responsive: true,
             maintainAspectRatio: false,
             scales: {
-                x: { stacked: true, max: 100, title: { display: true, text: 'Progress %' } },
-                y: { stacked: true }
+                x: {
+                    type: 'time',
+                    time: {
+                        unit: 'month',
+                        displayFormats: {
+                            month: 'MMM yyyy'
+                        }
+                    },
+                    min: startDate,
+                    max: endDate,
+                    title: {
+                        display: true,
+                        text: 'Timeline'
+                    }
+                },
+                y: {
+                    stacked: false
+                }
             },
-            plugins: { legend: { display: true } }
+            plugins: {
+                legend: {
+                    display: false
+                },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            const data = context.raw;
+                            const start = new Date(data.x[0]).toLocaleDateString();
+                            const end = new Date(data.x[1]).toLocaleDateString();
+                            return `${start} - ${end}`;
+                        }
+                    }
+                }
+            }
         }
     });
 }
