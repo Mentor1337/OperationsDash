@@ -1052,29 +1052,34 @@ function renderGanttChart() {
     
     const sortedProjects = [...filteredProjects].sort((a, b) => new Date(a.startDate) - new Date(b.startDate));
     
-    // Create dataset with floating bars representing project timelines
-    const datasets = sortedProjects.map(p => {
+    // Create single dataset with all projects to ensure proper alignment
+    const projectLabels = sortedProjects.map(p => p.name);
+    const projectData = sortedProjects.map((p, index) => {
         const pStart = new Date(p.startDate);
         const pEnd = new Date(p.endDate);
-        
         return {
-            label: p.name,
-            data: [{
-                x: [pStart, pEnd],
-                y: p.name
-            }],
-            backgroundColor: getStatusColor(p.status, 0.7),
-            borderColor: getStatusColor(p.status, 1),
-            borderWidth: 2,
-            barThickness: 20
+            x: [pStart, pEnd],
+            y: index  // Use index instead of name to match labels array
         };
     });
+    
+    // Color mapping for each bar
+    const backgroundColors = sortedProjects.map(p => getStatusColor(p.status, 0.7));
+    const borderColors = sortedProjects.map(p => getStatusColor(p.status, 1));
     
     ganttChartInstance = new Chart(ctx, {
         type: 'bar',
         data: {
-            labels: sortedProjects.map(p => p.name),
-            datasets: datasets
+            labels: projectLabels,
+            datasets: [{
+                label: 'Project Timeline',
+                data: projectData,
+                backgroundColor: backgroundColors,
+                borderColor: borderColors,
+                borderWidth: 2,
+                borderSkipped: false,
+                barPercentage: 0.8
+            }]
         },
         options: {
             indexAxis: 'y',
@@ -1094,10 +1099,15 @@ function renderGanttChart() {
                     title: {
                         display: true,
                         text: 'Timeline'
+                    },
+                    grid: {
+                        color: 'rgba(0, 0, 0, 0.05)'
                     }
                 },
                 y: {
-                    stacked: false
+                    grid: {
+                        display: false
+                    }
                 }
             },
             plugins: {
@@ -1106,11 +1116,19 @@ function renderGanttChart() {
                 },
                 tooltip: {
                     callbacks: {
+                        title: function(context) {
+                            return sortedProjects[context[0].dataIndex].name;
+                        },
                         label: function(context) {
+                            const project = sortedProjects[context.dataIndex];
                             const data = context.raw;
                             const start = new Date(data.x[0]).toLocaleDateString();
                             const end = new Date(data.x[1]).toLocaleDateString();
-                            return `${start} - ${end}`;
+                            return [
+                                `Timeline: ${start} - ${end}`,
+                                `Status: ${project.status}`,
+                                `Progress: ${project.progress}%`
+                            ];
                         }
                     }
                 }
@@ -1423,6 +1441,11 @@ function renderMilestoneCumulativeChart(milestones, dateRange) {
 function renderResources() {
     const container = document.getElementById('content-resources');
     
+    // Initialize selected engineers if empty (first time rendering Resources tab)
+    if (selectedEngineers.size === 0) {
+        selectedEngineers = new Set(engineers.map(e => e.name));
+    }
+    
     const capacityData = engineers.map(eng => {
         const nonProjectTotal = eng.nonProjectTime.reduce((sum, item) => sum + item.hours, 0);
         const projectHours = projects
@@ -1531,7 +1554,36 @@ function renderResources() {
         
         <!-- Individual Utilization Trends Chart -->
         <div class="bg-white rounded-lg shadow-md p-4 mb-4">
-            <h3 class="text-lg font-semibold text-gray-800 mb-4">Individual Capacity Utilization Trends - ${resourceDateRange === 'all' ? 'All Years' : resourceDateRange === 'custom' ? 'Custom Range' : resourceDateRange}</h3>
+            <h3 class="text-lg font-semibold text-gray-800 mb-3">Individual Capacity Utilization Trends - ${resourceDateRange === 'all' ? 'All Years' : resourceDateRange === 'custom' ? 'Custom Range' : resourceDateRange}</h3>
+            
+            <!-- View Mode Toggle -->
+            <div class="flex items-center space-x-2 mb-3">
+                <span class="text-sm text-gray-600 mr-2">View:</span>
+                <button onclick="setCapacityViewMode('all')" class="px-3 py-1 rounded text-sm ${capacityViewMode === 'all' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}">
+                    View All
+                </button>
+                <button onclick="setCapacityViewMode('individual')" class="px-3 py-1 rounded text-sm ${capacityViewMode === 'individual' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}">
+                    View Individual
+                </button>
+            </div>
+            
+            <!-- Custom Legend -->
+            <div id="capacity-legend" class="flex flex-wrap gap-2 mb-4">
+                ${engineers.map((eng, idx) => {
+                    const isSelected = selectedEngineers.has(eng.name);
+                    const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316', '#84cc16'];
+                    const color = colors[idx % colors.length];
+                    return `
+                        <button 
+                            onclick="toggleEngineer('${eng.name}')" 
+                            class="flex items-center space-x-1 px-2 py-1 rounded text-sm transition ${isSelected ? 'opacity-100' : 'opacity-40'} ${!isSelected ? 'line-through' : ''} hover:bg-gray-100">
+                            <span class="inline-block w-3 h-3 rounded-full" style="background-color: ${color}"></span>
+                            <span>${eng.name}</span>
+                        </button>
+                    `;
+                }).join('')}
+            </div>
+            
             <div class="chart-container"><canvas id="individual-trends-chart"></canvas></div>
         </div>
         
@@ -1774,6 +1826,40 @@ function renderTeamCapacityOverTime() {
     });
 }
 
+// Individual Capacity Chart - View Mode State
+let capacityViewMode = 'all'; // 'all' or 'individual'
+let selectedEngineers = new Set();
+
+function setCapacityViewMode(mode) {
+    capacityViewMode = mode;
+    if (mode === 'all') {
+        // Select all engineers
+        selectedEngineers = new Set(engineers.map(e => e.name));
+    } else if (mode === 'individual' && selectedEngineers.size === 0) {
+        // Select first engineer if none selected
+        if (engineers.length > 0) {
+            selectedEngineers = new Set([engineers[0].name]);
+        }
+    }
+    renderIndividualTrendsChart();
+}
+
+function toggleEngineer(name) {
+    if (capacityViewMode === 'individual') {
+        // Individual mode: select only this engineer
+        selectedEngineers.clear();
+        selectedEngineers.add(name);
+    } else {
+        // View all mode: toggle this engineer
+        if (selectedEngineers.has(name)) {
+            selectedEngineers.delete(name);
+        } else {
+            selectedEngineers.add(name);
+        }
+    }
+    renderIndividualTrendsChart();
+}
+
 function renderIndividualTrendsChart() {
     const ctx = document.getElementById('individual-trends-chart');
     if (!ctx) return;
@@ -1812,9 +1898,17 @@ function renderIndividualTrendsChart() {
         }
     }
     
-    const engineerColors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+    // Initialize selected engineers if empty
+    if (selectedEngineers.size === 0) {
+        selectedEngineers = new Set(engineers.map(e => e.name));
+    }
+    
+    const engineerColors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316', '#84cc16'];
     
     const datasets = engineers.map((eng, idx) => {
+        const baseColor = engineerColors[idx % engineerColors.length];
+        const isSelected = selectedEngineers.has(eng.name);
+        
         const data = months.map(monthObj => {
             const monthStart = new Date(monthObj.year, monthObj.month, 1);
             const monthEnd = new Date(monthObj.year, monthObj.month + 1, 0);
@@ -1837,9 +1931,11 @@ function renderIndividualTrendsChart() {
         return {
             label: eng.name,
             data: data,
-            borderColor: engineerColors[idx % engineerColors.length],
-            backgroundColor: engineerColors[idx % engineerColors.length] + '33',
-            tension: 0.1
+            borderColor: isSelected ? baseColor : baseColor + '40',
+            backgroundColor: isSelected ? baseColor + '33' : baseColor + '10',
+            borderWidth: isSelected ? 2 : 1,
+            tension: 0.1,
+            hidden: !isSelected && capacityViewMode === 'individual'
         };
     });
     
@@ -1863,7 +1959,7 @@ function renderIndividualTrendsChart() {
                 }
             },
             plugins: {
-                legend: { position: 'bottom' }
+                legend: { display: false }
             }
         }
     });

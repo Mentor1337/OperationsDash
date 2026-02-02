@@ -99,6 +99,7 @@ class Project(db.Model):
     budget = db.Column(db.Float, default=0)
     spent = db.Column(db.Float, default=0)
     notes = db.Column(db.Text)
+    location = db.Column(db.String(50))  # Module Line, Pack Line, or Live Agnostic
     jira_key = db.Column(db.String(50))  # Jira project/issue key (e.g., PROJ-123)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
@@ -124,6 +125,7 @@ class Project(db.Model):
             'budget': self.budget,
             'spent': self.spent,
             'notes': self.notes,
+            'location': self.location,
             'jiraKey': self.jira_key,
             'expenses': [e.to_dict() for e in self.expenses],
             'milestones': [m.to_dict() for m in self.milestones],
@@ -160,6 +162,10 @@ class Milestone(db.Model):
     planned_date = db.Column(db.Date, nullable=False)
     actual_date = db.Column(db.Date)
     status = db.Column(db.String(20), default='pending')
+    # Optional fields for capacity planning
+    start_date = db.Column(db.Date)
+    end_date = db.Column(db.Date)
+    hours_per_week = db.Column(db.Integer)
     
     def to_dict(self):
         return {
@@ -167,7 +173,10 @@ class Milestone(db.Model):
             'name': self.name,
             'plannedDate': self.planned_date.isoformat() if self.planned_date else None,
             'actualDate': self.actual_date.isoformat() if self.actual_date else None,
-            'status': self.status
+            'status': self.status,
+            'startDate': self.start_date.isoformat() if self.start_date else None,
+            'endDate': self.end_date.isoformat() if self.end_date else None,
+            'hoursPerWeek': self.hours_per_week
         }
 
 
