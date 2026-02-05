@@ -357,6 +357,7 @@ def create_project():
         budget=data.get('budget', 0),
         spent=data.get('spent', 0),
         notes=data.get('notes', ''),
+        location=data.get('location'),
         jira_key=data.get('jiraKey')
     )
     db.session.add(project)
@@ -419,6 +420,9 @@ def update_project(id):
     
     if 'notes' in data:
         project.notes = data['notes']
+    
+    if 'location' in data:
+        project.location = data['location']
     
     if 'jiraKey' in data:
         project.jira_key = data['jiraKey']

@@ -1658,6 +1658,35 @@ let currentCapacityChartInstance = null;
 let teamCapacityChartInstance = null;
 let individualTrendsChartInstance = null;
 
+// Helper function to calculate milestone hours for an engineer in a given date range
+function getMilestoneHoursForEngineer(engineerName, startDate, endDate) {
+    let totalMilestoneHours = 0;
+    
+    projects.forEach(project => {
+        // Only include active projects that have tasks assigned to this engineer
+        const engineerTasks = project.tasks.filter(t => t.engineer === engineerName);
+        if (engineerTasks.length === 0) return;
+        
+        // Check milestones with hours that overlap the date range
+        project.milestones.forEach(milestone => {
+            if (!milestone.hoursPerWeek || !milestone.startDate || !milestone.endDate) return;
+            
+            const mStart = new Date(milestone.startDate);
+            const mEnd = new Date(milestone.endDate);
+            
+            // Check if milestone overlaps with the given date range
+            if (mStart <= endDate && mEnd >= startDate) {
+                // Distribute milestone hours across engineers assigned to this project
+                const assignedEngineers = [...new Set(project.tasks.map(t => t.engineer))];
+                const hoursPerEngineer = milestone.hoursPerWeek / assignedEngineers.length;
+                totalMilestoneHours += hoursPerEngineer;
+            }
+        });
+    });
+    
+    return totalMilestoneHours;
+}
+
 function renderCurrentCapacityChart() {
     const ctx = document.getElementById('current-capacity-chart');
     if (!ctx) return;
@@ -1673,11 +1702,21 @@ function renderCurrentCapacityChart() {
             .flatMap(p => p.tasks)
             .filter(t => t.engineer === eng.name)
             .reduce((sum, t) => sum + t.hoursPerWeek, 0);
-        const available = eng.totalHours - nonProjectTotal - projectHours;
+        
+        // Add milestone hours for current week (use a wide range to capture all current milestones)
+        const now = new Date();
+        const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const weekEnd = new Date(weekStart);
+        weekEnd.setDate(weekEnd.getDate() + 7);
+        const milestoneHours = getMilestoneHoursForEngineer(eng.name, weekStart, weekEnd);
+        
+        const totalProjectHours = projectHours + milestoneHours;
+        const available = eng.totalHours - nonProjectTotal - totalProjectHours;
+        
         return {
             name: eng.name,
             nonProject: nonProjectTotal,
-            project: projectHours,
+            project: totalProjectHours,
             available: Math.max(0, available)
         };
     });
@@ -1771,8 +1810,11 @@ function renderTeamCapacityOverTime() {
                     .filter(t => t.engineer === eng.name)
                     .reduce((sum, t) => sum + t.hoursPerWeek, 0);
                 
+                // Add milestone hours for this month
+                const milestoneHours = getMilestoneHoursForEngineer(eng.name, monthStart, monthEnd);
+                
                 totalNonProject += nonProject;
-                totalProject += projectHours;
+                totalProject += projectHours + milestoneHours;
                 totalCapacity += eng.totalHours;
             });
             
@@ -1924,7 +1966,10 @@ function renderIndividualTrendsChart() {
                 .filter(t => t.engineer === eng.name)
                 .reduce((sum, t) => sum + t.hoursPerWeek, 0);
             
-            const utilization = ((nonProject + projectHours) / eng.totalHours) * 100;
+            // Add milestone hours for this month
+            const milestoneHours = getMilestoneHoursForEngineer(eng.name, monthStart, monthEnd);
+            
+            const utilization = ((nonProject + projectHours + milestoneHours) / eng.totalHours) * 100;
             return Math.round(utilization);
         });
         
