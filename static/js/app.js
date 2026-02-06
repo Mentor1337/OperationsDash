@@ -11,6 +11,7 @@ let searchQuery = '';
 let statusFilter = 'all';
 let ownerFilter = 'all';
 let priorityFilter = 'all';
+let locationFilter = 'all';
 let expandedProjects = new Set();
 let editingMilestoneId = null;
 
@@ -83,6 +84,7 @@ function renderCurrentTab() {
         case 'roadmap': renderRoadmap(); break;
         case 'milestones': renderMilestones(); break;
         case 'resources': renderResources(); break;
+        case 'budget': renderBudget(); break;
     }
 }
 
@@ -93,11 +95,12 @@ function renderCurrentTab() {
 function renderProjects() {
     const container = document.getElementById('content-projects');
     const uniqueOwners = [...new Set(projects.map(p => p.owner).filter(Boolean))];
+    const locations = ['Module Line', 'Pack Line', 'Live Agnostic'];
     const priorities = ['Critical', 'High', 'Medium', 'Low'];
     const statuses = ['On Track', 'At Risk', 'Behind', 'Planned', 'Completed', 'Cancelled'];
-    const hasActiveFilters = ownerFilter !== 'all' || priorityFilter !== 'all' || statusFilter !== 'all';
+    const hasActiveFilters = ownerFilter !== 'all' || priorityFilter !== 'all' || statusFilter !== 'all' || locationFilter !== 'all';
     const filtered = getFilteredProjects();
-    
+
     container.innerHTML = `
         <div class="flex justify-between items-center mb-4">
             <h2 class="text-2xl font-bold text-gray-800">Active Projects</h2>
@@ -106,7 +109,7 @@ function renderProjects() {
                 <span>Add Project</span>
             </button>
         </div>
-        
+
         <!-- Filters -->
         <div class="bg-white rounded-lg shadow-md p-4 mb-4">
             <div class="flex items-center space-x-4 mb-4">
@@ -115,14 +118,20 @@ function renderProjects() {
                 ${hasActiveFilters ? `<button onclick="clearFilters()" class="text-sm text-blue-600 hover:text-blue-700">Clear Filters</button>` : ''}
                 <span class="text-sm text-gray-600">Showing ${filtered.length} of ${projects.length} projects</span>
             </div>
-            <div class="grid grid-cols-4 gap-4">
+            <div class="grid grid-cols-5 gap-4">
                 <div class="flex-1 relative">
-                    <input type="text" id="project-search" placeholder="Search projects..." 
+                    <input type="text" id="project-search" placeholder="Search projects..."
                         class="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                         value="${searchQuery}" oninput="handleSearch(this.value)">
                     <svg class="w-5 h-5 absolute left-3 top-2.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
                     </svg>
+                </div>
+                <div>
+                    <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleLocationFilter(this.value)">
+                        <option value="all" ${locationFilter === 'all' ? 'selected' : ''}>All Locations</option>
+                        ${locations.map(loc => `<option value="${loc}" ${locationFilter === loc ? 'selected' : ''}>${loc}</option>`).join('')}
+                    </select>
                 </div>
                 <div>
                     <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleOwnerFilter(this.value)">
@@ -160,14 +169,15 @@ function renderProjects() {
 
 function getFilteredProjects() {
     return projects.filter(p => {
-        const matchesSearch = searchQuery === '' || 
+        const matchesSearch = searchQuery === '' ||
             p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
             p.owner.toLowerCase().includes(searchQuery.toLowerCase()) ||
             (p.notes && p.notes.toLowerCase().includes(searchQuery.toLowerCase()));
         const matchesOwner = ownerFilter === 'all' || p.owner === ownerFilter;
         const matchesPriority = priorityFilter === 'all' || p.priority === priorityFilter;
         const matchesStatus = statusFilter === 'all' || p.status === statusFilter;
-        return matchesSearch && matchesOwner && matchesPriority && matchesStatus;
+        const matchesLocation = locationFilter === 'all' || p.location === locationFilter;
+        return matchesSearch && matchesOwner && matchesPriority && matchesStatus && matchesLocation;
     });
 }
 
@@ -191,11 +201,17 @@ function handleStatusFilter(value) {
     renderProjects();
 }
 
+function handleLocationFilter(value) {
+    locationFilter = value;
+    renderProjects();
+}
+
 function clearFilters() {
     searchQuery = '';
     ownerFilter = 'all';
     priorityFilter = 'all';
     statusFilter = 'all';
+    locationFilter = 'all';
     renderProjects();
 }
 
@@ -376,11 +392,13 @@ function getPriorityClass(priority) {
 // Project Modal
 // ============================================================================
 
+let tempYearlyBudgets = [];
+
 function openProjectModal(id = null) {
     const modal = document.getElementById('modal-project');
     const title = document.getElementById('modal-project-title');
     const deleteBtn = document.getElementById('btn-delete-project');
-    
+
     if (id) {
         const p = projects.find(x => x.id === id);
         title.textContent = 'Edit Project';
@@ -388,6 +406,7 @@ function openProjectModal(id = null) {
         document.getElementById('project-id').value = p.id;
         document.getElementById('project-name').value = p.name;
         document.getElementById('project-owner').value = p.ownerId || '';
+        document.getElementById('project-location').value = p.location || '';
         document.getElementById('project-priority').value = p.priority;
         document.getElementById('project-status').value = p.status;
         document.getElementById('project-progress').value = p.progress;
@@ -399,6 +418,7 @@ function openProjectModal(id = null) {
         document.getElementById('project-notes').value = p.notes || '';
         // Load Jira issues for this project
         loadProjectJiraIssues(p.id);
+        tempYearlyBudgets = p.yearlyBudgets ? [...p.yearlyBudgets] : [];
     } else {
         title.textContent = 'New Project';
         deleteBtn.classList.add('hidden');
@@ -408,9 +428,79 @@ function openProjectModal(id = null) {
         document.getElementById('project-start-date').value = today;
         // Clear Jira issues list for new project
         document.getElementById('project-jira-list').innerHTML = '';
+        tempYearlyBudgets = [];
     }
-    
+
+    updateYearlyBudgetUI();
     modal.classList.remove('hidden');
+}
+
+function updateYearlyBudgetUI() {
+    const startDate = document.getElementById('project-start-date').value;
+    const endDate = document.getElementById('project-end-date').value;
+    const totalBudget = parseFloat(document.getElementById('project-budget').value) || 0;
+    const section = document.getElementById('yearly-budget-section');
+    const list = document.getElementById('yearly-budget-list');
+    const warning = document.getElementById('yearly-budget-warning');
+
+    if (!startDate || !endDate) {
+        section.classList.add('hidden');
+        return;
+    }
+
+    // Parse year directly from date string to avoid timezone issues
+    const startYear = parseInt(startDate.split('-')[0]);
+    const endYear = parseInt(endDate.split('-')[0]);
+
+    if (startYear === endYear) {
+        // Single year project - no need for yearly breakdown
+        section.classList.add('hidden');
+        tempYearlyBudgets = [{ year: startYear, amount: totalBudget }];
+        return;
+    }
+
+    section.classList.remove('hidden');
+
+    // Generate years
+    const years = [];
+    for (let y = startYear; y <= endYear; y++) {
+        years.push(y);
+    }
+
+    // Build the UI
+    list.innerHTML = years.map(year => {
+        const existing = tempYearlyBudgets.find(yb => yb.year === year);
+        const amount = existing ? existing.amount : 0;
+        return `
+            <div class="flex items-center space-x-3">
+                <span class="w-16 text-sm font-medium text-gray-700">${year}</span>
+                <input type="number" min="0" step="0.01" value="${amount}"
+                    onchange="updateYearlyBudgetAmount(${year}, this.value)"
+                    class="flex-1 px-2 py-1 border border-gray-300 rounded text-sm">
+                <span class="text-xs text-gray-500">$</span>
+            </div>
+        `;
+    }).join('');
+
+    // Check if allocations match total
+    const allocated = tempYearlyBudgets.reduce((sum, yb) => sum + (yb.amount || 0), 0);
+    if (Math.abs(allocated - totalBudget) > 0.01 && totalBudget > 0) {
+        warning.classList.remove('hidden');
+        warning.textContent = `Warning: Allocated $${allocated.toLocaleString()} of $${totalBudget.toLocaleString()} total budget`;
+    } else {
+        warning.classList.add('hidden');
+    }
+}
+
+function updateYearlyBudgetAmount(year, value) {
+    const amount = parseFloat(value) || 0;
+    const existing = tempYearlyBudgets.find(yb => yb.year === year);
+    if (existing) {
+        existing.amount = amount;
+    } else {
+        tempYearlyBudgets.push({ year, amount });
+    }
+    updateYearlyBudgetUI();
 }
 
 async function saveProject(e) {
@@ -419,6 +509,7 @@ async function saveProject(e) {
     const data = {
         name: document.getElementById('project-name').value,
         ownerId: parseInt(document.getElementById('project-owner').value) || null,
+        location: document.getElementById('project-location').value || null,
         priority: document.getElementById('project-priority').value,
         status: document.getElementById('project-status').value,
         progress: parseInt(document.getElementById('project-progress').value) || 0,
@@ -427,8 +518,9 @@ async function saveProject(e) {
         estimatedHoursPerWeek: parseInt(document.getElementById('project-hours').value) || 0,
         budget: parseFloat(document.getElementById('project-budget').value) || 0,
         spent: parseFloat(document.getElementById('project-spent').value) || 0,
-        notes: document.getElementById('project-notes').value
+        notes: document.getElementById('project-notes').value,
         // Note: jiraKey removed - now managed via separate API endpoints
+        yearlyBudgets: tempYearlyBudgets.filter(yb => yb.amount > 0)
     };
     
     try {
@@ -704,6 +796,9 @@ function updateMilestoneDisplay() {
                 `;
             } else {
                 // View mode - show milestone with edit button
+                const assignmentCount = (m.assignments || []).length;
+                const totalHours = (m.assignments || []).reduce((sum, a) => sum + a.hoursPerWeek, 0);
+                const dateRange = m.startDate && m.endDate ? `${m.startDate} → ${m.endDate}` : '';
                 return `
                     <div class="p-3 rounded-lg border ${bgClass}">
                         <div class="flex items-center justify-between">
@@ -717,13 +812,21 @@ function updateMilestoneDisplay() {
                                     ${m.actualDate ? `<span class="ml-3">• Completed: ${m.actualDate}</span>` : ''}
                                     ${isOverdue && !m.actualDate ? '<span class="ml-3 text-red-600 font-medium">• OVERDUE</span>' : ''}
                                 </div>
+                                ${dateRange ? `<div class="mt-1 ml-4 text-xs text-gray-500">Date range: ${dateRange}</div>` : ''}
+                                <div class="mt-1 ml-4 text-xs ${assignmentCount > 0 ? 'text-green-600' : 'text-gray-400'}">
+                                    ${assignmentCount > 0 ? `${assignmentCount} engineer(s) assigned • ${totalHours} hrs/week` : 'No engineers assigned'}
+                                </div>
                             </div>
                             <div class="flex items-center space-x-2">
+                                <button onclick="openMilestoneAssignmentModal(${m.id})"
+                                    class="px-3 py-1 text-xs bg-green-100 text-green-800 rounded hover:bg-green-200" title="Assign engineers">
+                                    Assign
+                                </button>
                                 ${m.status !== 'completed' ? `
-                                    <button onclick="updateMilestoneStatus(${m.id}, 'completed')" class="px-3 py-1 text-xs bg-green-100 text-green-800 rounded hover:bg-green-200">Complete</button>
+                                    <button onclick="updateMilestoneStatus(${m.id}, 'completed')" class="px-3 py-1 text-xs bg-blue-100 text-blue-800 rounded hover:bg-blue-200">Complete</button>
                                     ${m.status !== 'at-risk' ? `<button onclick="updateMilestoneStatus(${m.id}, 'at-risk')" class="px-3 py-1 text-xs bg-yellow-100 text-yellow-800 rounded hover:bg-yellow-200">At Risk</button>` : ''}
                                 ` : ''}
-                                <button onclick="editMilestone(${m.id})" 
+                                <button onclick="editMilestone(${m.id})"
                                     class="p-2 text-blue-600 hover:bg-blue-50 rounded" title="Edit milestone">
                                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path>
@@ -843,6 +946,153 @@ async function saveMilestoneEdit(id) {
         showToast('Milestone updated', 'success');
     } catch (err) {
         showToast('Failed to update milestone', 'error');
+    }
+}
+
+// ============================================================================
+// Milestone Assignment Modal
+// ============================================================================
+
+let currentMilestoneForAssignment = null;
+
+function openMilestoneAssignmentModal(milestoneId) {
+    // Find the milestone across all projects
+    let milestone = null;
+    let project = null;
+    for (const p of projects) {
+        const m = p.milestones.find(x => x.id === milestoneId);
+        if (m) {
+            milestone = m;
+            project = p;
+            break;
+        }
+    }
+
+    if (!milestone) {
+        showToast('Milestone not found', 'error');
+        return;
+    }
+
+    currentMilestoneForAssignment = milestone;
+    document.getElementById('milestone-assignment-id').value = milestoneId;
+    document.getElementById('milestone-assignment-name').textContent = `${project.name} - ${milestone.name}`;
+
+    const dateRange = milestone.startDate && milestone.endDate
+        ? `${milestone.startDate} → ${milestone.endDate}`
+        : 'Date range will be calculated automatically';
+    document.getElementById('milestone-assignment-dates').textContent = dateRange;
+
+    // Populate engineer dropdown
+    const select = document.getElementById('new-milestone-assignment-engineer');
+    select.innerHTML = engineers.map(e => `<option value="${e.id}">${e.name}</option>`).join('');
+
+    updateMilestoneAssignmentsDisplay();
+    document.getElementById('modal-milestone-assignment').classList.remove('hidden');
+}
+
+function updateMilestoneAssignmentsDisplay() {
+    const list = document.getElementById('milestone-assignments-list');
+    const assignments = currentMilestoneForAssignment.assignments || [];
+
+    if (assignments.length === 0) {
+        list.innerHTML = '<p class="text-gray-500 text-center py-4">No engineers assigned to this milestone</p>';
+    } else {
+        list.innerHTML = assignments.map(a => {
+            const engineer = engineers.find(e => e.id === a.engineerId);
+            const capacity = engineer ? Math.round((a.hoursPerWeek / engineer.totalHours) * 100) : 0;
+            return `
+                <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200">
+                    <div>
+                        <span class="font-medium text-gray-800">${a.engineer}</span>
+                        <span class="text-sm text-gray-600 ml-2">${a.hoursPerWeek} hrs/week</span>
+                        <span class="text-xs text-gray-500 ml-2">(${capacity}% capacity)</span>
+                    </div>
+                    <button onclick="removeMilestoneAssignment(${a.id})"
+                        class="p-2 text-red-600 hover:bg-red-50 rounded" title="Remove assignment">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+            `;
+        }).join('');
+    }
+}
+
+async function addMilestoneAssignment() {
+    const milestoneId = document.getElementById('milestone-assignment-id').value;
+    const engineerId = document.getElementById('new-milestone-assignment-engineer').value;
+    const hours = parseInt(document.getElementById('new-milestone-assignment-hours').value);
+
+    if (!hours || hours <= 0) {
+        showToast('Please enter hours per week', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API}/api/milestones/${milestoneId}/assignments`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ engineerId: parseInt(engineerId), hoursPerWeek: hours })
+        });
+
+        if (!response.ok) {
+            const err = await response.json();
+            showToast(err.error || 'Failed to add assignment', 'error');
+            return;
+        }
+
+        await loadData();
+
+        // Refresh the milestone data
+        for (const p of projects) {
+            const m = p.milestones.find(x => x.id == milestoneId);
+            if (m) {
+                currentMilestoneForAssignment = m;
+                break;
+            }
+        }
+
+        updateMilestoneAssignmentsDisplay();
+        // Also update the milestone modal display if open
+        if (currentProject) {
+            currentProject = projects.find(p => p.id === currentProject.id);
+            updateMilestoneDisplay();
+        }
+        document.getElementById('new-milestone-assignment-hours').value = '';
+        showToast('Engineer assigned to milestone', 'success');
+    } catch (err) {
+        showToast('Failed to add assignment', 'error');
+    }
+}
+
+async function removeMilestoneAssignment(assignmentId) {
+    if (!confirm('Remove this assignment?')) return;
+
+    const milestoneId = document.getElementById('milestone-assignment-id').value;
+
+    try {
+        await fetch(`${API}/api/milestone-assignments/${assignmentId}`, { method: 'DELETE' });
+        await loadData();
+
+        // Refresh the milestone data
+        for (const p of projects) {
+            const m = p.milestones.find(x => x.id == milestoneId);
+            if (m) {
+                currentMilestoneForAssignment = m;
+                break;
+            }
+        }
+
+        updateMilestoneAssignmentsDisplay();
+        // Also update the milestone modal display if open
+        if (currentProject) {
+            currentProject = projects.find(p => p.id === currentProject.id);
+            updateMilestoneDisplay();
+        }
+        showToast('Assignment removed', 'success');
+    } catch (err) {
+        showToast('Failed to remove assignment', 'error');
     }
 }
 
@@ -976,11 +1226,12 @@ function renderRoadmap() {
     const currentYear = new Date().getFullYear();
     const yearOptions = [currentYear - 1, currentYear, currentYear + 1, currentYear + 2, currentYear + 3, currentYear + 4];
     const uniqueOwners = [...new Set(projects.map(p => p.owner).filter(Boolean))];
+    const locations = ['Module Line', 'Pack Line', 'Live Agnostic'];
     const priorities = ['Critical', 'High', 'Medium', 'Low'];
     const statuses = ['On Track', 'At Risk', 'Behind', 'Planned', 'Completed', 'Cancelled'];
-    const hasActiveFilters = ownerFilter !== 'all' || priorityFilter !== 'all' || statusFilter !== 'all';
+    const hasActiveFilters = ownerFilter !== 'all' || priorityFilter !== 'all' || statusFilter !== 'all' || locationFilter !== 'all';
     const filteredProjects = getFilteredProjects();
-    
+
     container.innerHTML = `
         <div class="flex justify-between items-center mb-4">
             <h2 class="text-2xl font-bold text-gray-800">Project Roadmap</h2>
@@ -989,7 +1240,7 @@ function renderRoadmap() {
                 <span>Add Planned Project</span>
             </button>
         </div>
-        
+
         <!-- Filters -->
         <div class="bg-white rounded-lg shadow-md p-4 mb-4">
             <div class="flex items-center space-x-4 mb-4">
@@ -998,7 +1249,14 @@ function renderRoadmap() {
                 ${hasActiveFilters ? `<button onclick="clearFilters(); renderRoadmap();" class="text-sm text-blue-600 hover:text-blue-700">Clear Filters</button>` : ''}
                 <span class="text-sm text-gray-600">Showing ${filteredProjects.length} of ${projects.length} projects</span>
             </div>
-            <div class="grid grid-cols-3 gap-4">
+            <div class="grid grid-cols-4 gap-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Location</label>
+                    <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleLocationFilter(this.value); renderRoadmap();">
+                        <option value="all" ${locationFilter === 'all' ? 'selected' : ''}>All Locations</option>
+                        ${locations.map(loc => `<option value="${loc}" ${locationFilter === loc ? 'selected' : ''}>${loc}</option>`).join('')}
+                    </select>
+                </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Owner</label>
                     <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleOwnerFilter(this.value); renderRoadmap();">
@@ -1167,20 +1425,60 @@ function renderGanttChart() {
     // Color mapping for each bar
     const backgroundColors = sortedProjects.map(p => getStatusColor(p.status, 0.7));
     const borderColors = sortedProjects.map(p => getStatusColor(p.status, 1));
-    
+
+    // Build datasets array
+    const datasets = [{
+        label: 'Project Timeline',
+        data: projectData,
+        backgroundColor: backgroundColors,
+        borderColor: borderColors,
+        borderWidth: 2,
+        borderSkipped: false,
+        barPercentage: 0.8
+    }];
+
+    // Add milestone markers if showMilestones is enabled
+    if (showMilestones) {
+        const milestoneData = [];
+        const milestoneColors = [];
+        sortedProjects.forEach((p, projectIndex) => {
+            if (p.milestones && p.milestones.length > 0) {
+                p.milestones.forEach(m => {
+                    const milestoneDate = new Date(m.plannedDate);
+                    if (milestoneDate >= startDate && milestoneDate <= endDate) {
+                        milestoneData.push({
+                            x: milestoneDate,
+                            y: p.name,  // Use project name to match categorical y-axis
+                            milestoneName: m.name,
+                            projectName: p.name,
+                            status: m.status
+                        });
+                        milestoneColors.push(m.status === 'completed' ? '#10b981' : m.status === 'missed' ? '#ef4444' : '#f59e0b');
+                    }
+                });
+            }
+        });
+
+        if (milestoneData.length > 0) {
+            datasets.push({
+                label: 'Milestones',
+                type: 'scatter',
+                data: milestoneData,
+                backgroundColor: milestoneColors,
+                borderColor: '#ffffff',
+                borderWidth: 2,
+                pointRadius: 8,
+                pointStyle: 'rectRot',
+                pointHoverRadius: 10
+            });
+        }
+    }
+
     ganttChartInstance = new Chart(ctx, {
         type: 'bar',
         data: {
             labels: projectLabels,
-            datasets: [{
-                label: 'Project Timeline',
-                data: projectData,
-                backgroundColor: backgroundColors,
-                borderColor: borderColors,
-                borderWidth: 2,
-                borderSkipped: false,
-                barPercentage: 0.8
-            }]
+            datasets: datasets
         },
         options: {
             indexAxis: 'y',
@@ -1218,11 +1516,27 @@ function renderGanttChart() {
                 tooltip: {
                     callbacks: {
                         title: function(context) {
-                            return sortedProjects[context[0].dataIndex].name;
+                            const data = context[0].raw;
+                            // Check if this is a milestone point
+                            if (data.milestoneName) {
+                                return data.milestoneName;
+                            }
+                            return sortedProjects[context[0].dataIndex]?.name || '';
                         },
                         label: function(context) {
-                            const project = sortedProjects[context.dataIndex];
                             const data = context.raw;
+                            // Check if this is a milestone point
+                            if (data.milestoneName) {
+                                const date = new Date(data.x).toLocaleDateString();
+                                return [
+                                    `Project: ${data.projectName}`,
+                                    `Date: ${date}`,
+                                    `Status: ${data.status}`
+                                ];
+                            }
+                            // Regular project bar
+                            const project = sortedProjects[context.dataIndex];
+                            if (!project) return '';
                             const start = new Date(data.x[0]).toLocaleDateString();
                             const end = new Date(data.x[1]).toLocaleDateString();
                             return [
@@ -1762,29 +2076,29 @@ let individualTrendsChartInstance = null;
 // Helper function to calculate milestone hours for an engineer in a given date range
 function getMilestoneHoursForEngineer(engineerName, startDate, endDate) {
     let totalMilestoneHours = 0;
-    
+
     projects.forEach(project => {
-        // Only include active projects that have tasks assigned to this engineer
-        const engineerTasks = project.tasks.filter(t => t.engineer === engineerName);
-        if (engineerTasks.length === 0) return;
-        
-        // Check milestones with hours that overlap the date range
+        // Check milestones with assignments that overlap the date range
         project.milestones.forEach(milestone => {
-            if (!milestone.hoursPerWeek || !milestone.startDate || !milestone.endDate) return;
-            
+            // Skip milestones without date ranges
+            if (!milestone.startDate || !milestone.endDate) return;
+
             const mStart = new Date(milestone.startDate);
             const mEnd = new Date(milestone.endDate);
-            
+
             // Check if milestone overlaps with the given date range
             if (mStart <= endDate && mEnd >= startDate) {
-                // Distribute milestone hours across engineers assigned to this project
-                const assignedEngineers = [...new Set(project.tasks.map(t => t.engineer))];
-                const hoursPerEngineer = milestone.hoursPerWeek / assignedEngineers.length;
-                totalMilestoneHours += hoursPerEngineer;
+                // Look for this engineer's assignment to this milestone
+                const assignments = milestone.assignments || [];
+                const assignment = assignments.find(a => a.engineer === engineerName);
+
+                if (assignment) {
+                    totalMilestoneHours += assignment.hoursPerWeek;
+                }
             }
         });
     });
-    
+
     return totalMilestoneHours;
 }
 
@@ -2006,74 +2320,111 @@ function toggleEngineer(name) {
 function renderIndividualTrendsChart() {
     const ctx = document.getElementById('individual-trends-chart');
     if (!ctx) return;
-    
+
+    // Update the legend to reflect current selection state
+    const legendContainer = document.getElementById('capacity-legend');
+    if (legendContainer) {
+        const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316', '#84cc16'];
+        legendContainer.innerHTML = engineers.map((eng, idx) => {
+            const isSelected = selectedEngineers.has(eng.name);
+            const color = colors[idx % colors.length];
+            return `
+                <button
+                    onclick="toggleEngineer('${eng.name}')"
+                    class="flex items-center space-x-1 px-2 py-1 rounded text-sm transition ${isSelected ? 'opacity-100' : 'opacity-40'} ${!isSelected ? 'line-through' : ''} hover:bg-gray-100">
+                    <span class="inline-block w-3 h-3 rounded-full" style="background-color: ${color}"></span>
+                    <span>${eng.name}</span>
+                </button>
+            `;
+        }).join('');
+    }
+
     if (individualTrendsChartInstance) {
         individualTrendsChartInstance.destroy();
     }
     
     // Calculate date range based on resourceDateRange
     const currentYear = new Date().getFullYear();
-    let startYear, endYear;
-    
+    let startDate, endDate;
+
     if (resourceDateRange === 'all') {
-        startYear = currentYear - 1;
-        endYear = currentYear + 4;
+        startDate = new Date(currentYear - 1, 0, 1);
+        endDate = new Date(currentYear + 4, 11, 31);
     } else if (resourceDateRange === 'custom') {
         if (!resourceCustomStart || !resourceCustomEnd) {
-            startYear = endYear = currentYear;
+            startDate = new Date(currentYear, 0, 1);
+            endDate = new Date(currentYear, 11, 31);
         } else {
-            startYear = new Date(resourceCustomStart).getFullYear();
-            endYear = new Date(resourceCustomEnd).getFullYear();
+            startDate = new Date(resourceCustomStart);
+            endDate = new Date(resourceCustomEnd);
         }
     } else {
-        startYear = endYear = parseInt(resourceDateRange);
+        const year = parseInt(resourceDateRange);
+        startDate = new Date(year, 0, 1);
+        endDate = new Date(year, 11, 31);
     }
-    
-    // Generate month objects instead of strings to avoid parsing issues
-    const months = [];
-    for (let year = startYear; year <= endYear; year++) {
-        for (let month = 0; month < 12; month++) {
-            months.push({
-                year: year,
-                month: month,
-                label: new Date(year, month, 1).toLocaleDateString('en-US', { year: 'numeric', month: '2-digit' })
-            });
+
+    // Generate weeks for data granularity, but track month changes for labels
+    const weeks = [];
+    // Start from the Monday of the week containing startDate
+    let currentWeekStart = new Date(startDate);
+    const dayOfWeek = currentWeekStart.getDay();
+    const daysToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    currentWeekStart.setDate(currentWeekStart.getDate() - daysToMonday);
+
+    let lastMonth = -1;
+    while (currentWeekStart <= endDate) {
+        const weekEnd = new Date(currentWeekStart);
+        weekEnd.setDate(weekEnd.getDate() + 6);
+
+        // Only show label when entering a new month
+        const currentMonth = currentWeekStart.getMonth();
+        const currentYr = currentWeekStart.getFullYear();
+        let label = '';
+        if (currentMonth !== lastMonth) {
+            label = currentWeekStart.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+            lastMonth = currentMonth;
         }
+
+        weeks.push({
+            start: new Date(currentWeekStart),
+            end: weekEnd,
+            label: label
+        });
+
+        currentWeekStart.setDate(currentWeekStart.getDate() + 7);
     }
-    
+
     // Initialize selected engineers if empty
     if (selectedEngineers.size === 0) {
         selectedEngineers = new Set(engineers.map(e => e.name));
     }
-    
+
     const engineerColors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316', '#84cc16'];
-    
+
     const datasets = engineers.map((eng, idx) => {
         const baseColor = engineerColors[idx % engineerColors.length];
         const isSelected = selectedEngineers.has(eng.name);
-        
-        const data = months.map(monthObj => {
-            const monthStart = new Date(monthObj.year, monthObj.month, 1);
-            const monthEnd = new Date(monthObj.year, monthObj.month + 1, 0);
-            
+
+        const data = weeks.map(week => {
             const nonProject = eng.nonProjectTime.reduce((sum, item) => sum + item.hours, 0);
             const projectHours = projects
                 .filter(p => {
                     const pStart = new Date(p.startDate);
                     const pEnd = new Date(p.endDate);
-                    return pStart <= monthEnd && pEnd >= monthStart;
+                    return pStart <= week.end && pEnd >= week.start;
                 })
                 .flatMap(p => p.tasks)
                 .filter(t => t.engineer === eng.name)
                 .reduce((sum, t) => sum + t.hoursPerWeek, 0);
-            
-            // Add milestone hours for this month
-            const milestoneHours = getMilestoneHoursForEngineer(eng.name, monthStart, monthEnd);
-            
+
+            // Add milestone hours for this week
+            const milestoneHours = getMilestoneHoursForEngineer(eng.name, week.start, week.end);
+
             const utilization = ((nonProject + projectHours + milestoneHours) / eng.totalHours) * 100;
             return Math.round(utilization);
         });
-        
+
         return {
             label: eng.name,
             data: data,
@@ -2084,11 +2435,13 @@ function renderIndividualTrendsChart() {
             hidden: !isSelected && capacityViewMode === 'individual'
         };
     });
-    
+
+    const weekLabels = weeks.map(w => w.label);
+
     individualTrendsChartInstance = new Chart(ctx, {
         type: 'line',
         data: {
-            labels: months.map(m => m.label),
+            labels: weekLabels,
             datasets: datasets
         },
         options: {
@@ -2096,11 +2449,23 @@ function renderIndividualTrendsChart() {
             maintainAspectRatio: false,
             scales: {
                 x: {
-                    ticks: { maxRotation: 45, minRotation: 45 }
+                    ticks: {
+                        maxRotation: 45,
+                        minRotation: 45,
+                        autoSkip: false
+                    },
+                    grid: {
+                        color: (context) => {
+                            // Bold line at month boundaries (where label exists)
+                            return weekLabels[context.index] ? 'rgba(0, 0, 0, 0.3)' : 'rgba(0, 0, 0, 0.05)';
+                        },
+                        lineWidth: (context) => {
+                            return weekLabels[context.index] ? 2 : 1;
+                        }
+                    }
                 },
                 y: {
-                    min: 0,
-                    max: 120,
+                    beginAtZero: true,
                     title: { display: true, text: 'Utilization %' }
                 }
             },
@@ -2151,18 +2516,22 @@ function renderMonthlyBreakdownTable() {
                 .flatMap(p => p.tasks)
                 .filter(t => t.engineer === eng.name)
                 .reduce((sum, t) => sum + t.hoursPerWeek, 0);
-            
-            const available = eng.totalHours - nonProject - projectHours;
-            const utilization = Math.round(((nonProject + projectHours) / eng.totalHours) * 100);
-            
-            const utilizationColor = utilization > 100 ? 'text-red-600' : 
-                                      utilization > 85 ? 'text-yellow-600' : 
+
+            // Add milestone hours
+            const milestoneHours = getMilestoneHoursForEngineer(eng.name, monthStart, monthEnd);
+
+            const available = eng.totalHours - nonProject - projectHours - milestoneHours;
+            const utilization = Math.round(((nonProject + projectHours + milestoneHours) / eng.totalHours) * 100);
+
+            const utilizationColor = utilization > 100 ? 'text-red-600' :
+                                      utilization > 85 ? 'text-yellow-600' :
                                       'text-green-600';
-            
+
                 cells.push(`
                     <td class="p-2 text-center">
                         <div class="text-xs">
                             <div class="text-gray-600">P:${projectHours}</div>
+                            <div class="text-gray-600">M:${milestoneHours}</div>
                             <div class="text-gray-600">NP:${nonProject}</div>
                             <div class="text-gray-600">A:${available}</div>
                             <div class="font-semibold mt-1 ${utilizationColor}">${utilization}%</div>
@@ -2189,8 +2558,9 @@ function renderMonthlyBreakdownTable() {
         
         let totalNonProject = 0;
         let totalProject = 0;
+        let totalMilestone = 0;
         let totalCapacity = 0;
-        
+
         engineers.forEach(eng => {
             const nonProject = eng.nonProjectTime.reduce((sum, item) => sum + item.hours, 0);
             const projectHours = projects
@@ -2202,23 +2572,26 @@ function renderMonthlyBreakdownTable() {
                 .flatMap(p => p.tasks)
                 .filter(t => t.engineer === eng.name)
                 .reduce((sum, t) => sum + t.hoursPerWeek, 0);
-            
+            const milestoneHours = getMilestoneHoursForEngineer(eng.name, monthStart, monthEnd);
+
             totalNonProject += nonProject;
             totalProject += projectHours;
+            totalMilestone += milestoneHours;
             totalCapacity += eng.totalHours;
         });
-        
-        const totalAvailable = totalCapacity - totalNonProject - totalProject;
-        const totalUtilization = Math.round(((totalNonProject + totalProject) / totalCapacity) * 100);
-        
-        const utilizationColor = totalUtilization > 100 ? 'text-red-600' : 
-                                  totalUtilization > 85 ? 'text-yellow-600' : 
+
+        const totalAvailable = totalCapacity - totalNonProject - totalProject - totalMilestone;
+        const totalUtilization = Math.round(((totalNonProject + totalProject + totalMilestone) / totalCapacity) * 100);
+
+        const utilizationColor = totalUtilization > 100 ? 'text-red-600' :
+                                  totalUtilization > 85 ? 'text-yellow-600' :
                                   'text-green-600';
-        
+
             totalCells.push(`
                 <td class="p-2 text-center">
                     <div class="text-xs">
                         <div class="text-gray-700">P:${totalProject}</div>
+                        <div class="text-gray-700">M:${totalMilestone}</div>
                         <div class="text-gray-700">NP:${totalNonProject}</div>
                         <div class="text-gray-700">A:${totalAvailable}</div>
                         <div class="font-bold mt-1 ${utilizationColor}">${totalUtilization}%</div>
@@ -2477,4 +2850,429 @@ function getJiraStatusClass(statusCategory) {
         'Done': 'bg-green-100 text-green-700'
     };
     return classes[statusCategory] || 'bg-gray-100 text-gray-700';
+}
+
+// ============================================================================
+// Budget Tab
+// ============================================================================
+
+let budgetChartInstance = null;
+let expenseCategoryChartInstance = null;
+let budgetYearFilter = 'all';
+
+function handleBudgetYearFilter(value) {
+    budgetYearFilter = value;
+    renderBudget();
+}
+
+function clearBudgetFilters() {
+    locationFilter = 'all';
+    ownerFilter = 'all';
+    priorityFilter = 'all';
+    statusFilter = 'all';
+    budgetYearFilter = 'all';
+    renderBudget();
+}
+
+function renderBudget() {
+    const container = document.getElementById('content-budget');
+
+    // Filter options
+    const uniqueOwners = [...new Set(projects.map(p => p.owner).filter(Boolean))];
+    const locations = ['Module Line', 'Pack Line', 'Live Agnostic'];
+    const priorities = ['Critical', 'High', 'Medium', 'Low'];
+    const statuses = ['On Track', 'At Risk', 'Behind', 'Planned', 'Completed', 'Cancelled'];
+
+    // Get all years from projects (based on start/end dates)
+    const allYears = new Set();
+    projects.forEach(p => {
+        if (p.startDate) allYears.add(parseInt(p.startDate.split('-')[0]));
+        if (p.endDate) allYears.add(parseInt(p.endDate.split('-')[0]));
+        p.expenses?.forEach(e => {
+            if (e.date) allYears.add(parseInt(e.date.split('-')[0]));
+        });
+    });
+    const yearOptions = [...allYears].sort((a, b) => a - b);
+
+    const hasActiveFilters = locationFilter !== 'all' || ownerFilter !== 'all' || priorityFilter !== 'all' || statusFilter !== 'all' || budgetYearFilter !== 'all';
+
+    // Filter projects based on selected filters
+    const filteredProjects = projects.filter(p => {
+        const matchesLocation = locationFilter === 'all' || p.location === locationFilter;
+        const matchesOwner = ownerFilter === 'all' || p.owner === ownerFilter;
+        const matchesPriority = priorityFilter === 'all' || p.priority === priorityFilter;
+        const matchesStatus = statusFilter === 'all' || p.status === statusFilter;
+        const projectStartYear = p.startDate ? parseInt(p.startDate.split('-')[0]) : null;
+        const projectEndYear = p.endDate ? parseInt(p.endDate.split('-')[0]) : null;
+        const matchesYear = budgetYearFilter === 'all' ||
+            (projectStartYear && projectEndYear &&
+             parseInt(budgetYearFilter) >= projectStartYear &&
+             parseInt(budgetYearFilter) <= projectEndYear);
+        return matchesLocation && matchesOwner && matchesPriority && matchesStatus && matchesYear;
+    });
+
+    // Get years from filtered projects
+    const years = new Set();
+    filteredProjects.forEach(p => {
+        if (p.startDate) years.add(parseInt(p.startDate.split('-')[0]));
+        if (p.endDate) years.add(parseInt(p.endDate.split('-')[0]));
+        p.expenses?.forEach(e => {
+            if (e.date) years.add(parseInt(e.date.split('-')[0]));
+        });
+    });
+    const sortedYears = budgetYearFilter !== 'all' ? [parseInt(budgetYearFilter)] : [...years].sort((a, b) => a - b);
+
+    // Calculate totals from filtered projects
+    const totalBudget = filteredProjects.reduce((sum, p) => sum + (p.budget || 0), 0);
+    const totalSpent = filteredProjects.reduce((sum, p) => sum + (p.spent || 0), 0);
+    const totalRemaining = totalBudget - totalSpent;
+
+    // Calculate by year - projects contribute to years they span
+    const yearlyData = {};
+    sortedYears.forEach(year => {
+        yearlyData[year] = { budget: 0, spent: 0, expenses: [] };
+    });
+
+    filteredProjects.forEach(p => {
+        const startYear = p.startDate ? parseInt(p.startDate.split('-')[0]) : null;
+        const endYear = p.endDate ? parseInt(p.endDate.split('-')[0]) : null;
+
+        // Use yearly budget allocations if available, otherwise distribute evenly
+        if (p.yearlyBudgets && p.yearlyBudgets.length > 0) {
+            // Use explicit yearly budget allocations
+            p.yearlyBudgets.forEach(yb => {
+                if (yearlyData[yb.year]) {
+                    yearlyData[yb.year].budget += yb.amount || 0;
+                }
+            });
+        } else if (startYear && endYear && p.budget) {
+            // Fall back to even distribution if no yearly budgets defined
+            const yearsSpanned = endYear - startYear + 1;
+            const budgetPerYear = p.budget / yearsSpanned;
+            for (let y = startYear; y <= endYear; y++) {
+                if (yearlyData[y]) {
+                    yearlyData[y].budget += budgetPerYear;
+                }
+            }
+        } else if (startYear && p.budget) {
+            if (yearlyData[startYear]) {
+                yearlyData[startYear].budget += p.budget;
+            }
+        }
+
+        // Expenses go to their actual year
+        p.expenses?.forEach(e => {
+            if (e.date) {
+                const expYear = parseInt(e.date.split('-')[0]);
+                if (yearlyData[expYear]) {
+                    yearlyData[expYear].spent += e.amount || 0;
+                    yearlyData[expYear].expenses.push({
+                        ...e,
+                        projectName: p.name
+                    });
+                }
+            }
+        });
+    });
+
+    // Calculate expense categories from filtered projects
+    const categoryTotals = {};
+    filteredProjects.forEach(p => {
+        p.expenses?.forEach(e => {
+            const cat = e.category || 'Other';
+            categoryTotals[cat] = (categoryTotals[cat] || 0) + (e.amount || 0);
+        });
+    });
+
+    container.innerHTML = `
+        <div class="flex justify-between items-center mb-4">
+            <h2 class="text-2xl font-bold text-gray-800">Budget Summary</h2>
+        </div>
+
+        <!-- Filters -->
+        <div class="bg-white rounded-lg shadow-md p-4 mb-4">
+            <div class="flex items-center space-x-4 mb-4">
+                <svg class="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"></path></svg>
+                <span class="font-medium text-gray-700">Filters:</span>
+                ${hasActiveFilters ? '<button onclick="clearBudgetFilters()" class="text-sm text-blue-600 hover:text-blue-700">Clear Filters</button>' : ''}
+                <span class="text-sm text-gray-600">Showing ${filteredProjects.length} of ${projects.length} projects</span>
+            </div>
+            <div class="grid grid-cols-5 gap-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Year</label>
+                    <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleBudgetYearFilter(this.value)">
+                        <option value="all" ${budgetYearFilter === 'all' ? 'selected' : ''}>All Years</option>
+                        ${yearOptions.map(y => '<option value="' + y + '" ' + (budgetYearFilter === String(y) ? 'selected' : '') + '>' + y + '</option>').join('')}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Location</label>
+                    <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleLocationFilter(this.value); renderBudget();">
+                        <option value="all" ${locationFilter === 'all' ? 'selected' : ''}>All Locations</option>
+                        ${locations.map(loc => '<option value="' + loc + '" ' + (locationFilter === loc ? 'selected' : '') + '>' + loc + '</option>').join('')}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Owner</label>
+                    <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleOwnerFilter(this.value); renderBudget();">
+                        <option value="all" ${ownerFilter === 'all' ? 'selected' : ''}>All Owners</option>
+                        ${uniqueOwners.map(owner => '<option value="' + owner + '" ' + (ownerFilter === owner ? 'selected' : '') + '>' + owner + '</option>').join('')}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Priority</label>
+                    <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handlePriorityFilter(this.value); renderBudget();">
+                        <option value="all" ${priorityFilter === 'all' ? 'selected' : ''}>All Priorities</option>
+                        ${priorities.map(p => '<option value="' + p + '" ' + (priorityFilter === p ? 'selected' : '') + '>' + p + '</option>').join('')}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Status</label>
+                    <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleStatusFilter(this.value); renderBudget();">
+                        <option value="all" ${statusFilter === 'all' ? 'selected' : ''}>All Statuses</option>
+                        ${statuses.map(s => '<option value="' + s + '" ' + (statusFilter === s ? 'selected' : '') + '>' + s + '</option>').join('')}
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- Summary Cards -->
+        <div class="grid grid-cols-4 gap-4 mb-6">
+            <div class="bg-white rounded-lg shadow-md p-4">
+                <div class="flex items-center justify-between">
+                    <p class="text-sm text-gray-600">Total Budget</p>
+                    <svg class="w-8 h-8 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                </div>
+                <p class="text-3xl font-bold text-gray-800 mt-2">$${totalBudget.toLocaleString()}</p>
+            </div>
+            <div class="bg-white rounded-lg shadow-md p-4">
+                <div class="flex items-center justify-between">
+                    <p class="text-sm text-gray-600">Total Spent</p>
+                    <svg class="w-8 h-8 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"></path>
+                    </svg>
+                </div>
+                <p class="text-3xl font-bold text-gray-800 mt-2">$${totalSpent.toLocaleString()}</p>
+            </div>
+            <div class="bg-white rounded-lg shadow-md p-4">
+                <div class="flex items-center justify-between">
+                    <p class="text-sm text-gray-600">Remaining</p>
+                    <svg class="w-8 h-8 ${totalRemaining >= 0 ? 'text-green-600' : 'text-red-600'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                </div>
+                <p class="text-3xl font-bold ${totalRemaining >= 0 ? 'text-green-600' : 'text-red-600'} mt-2">$${totalRemaining.toLocaleString()}</p>
+            </div>
+            <div class="bg-white rounded-lg shadow-md p-4">
+                <div class="flex items-center justify-between">
+                    <p class="text-sm text-gray-600">Budget Utilization</p>
+                    <svg class="w-8 h-8 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                    </svg>
+                </div>
+                <p class="text-3xl font-bold text-gray-800 mt-2">${totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0}%</p>
+            </div>
+        </div>
+
+        <!-- Charts Row -->
+        <div class="grid grid-cols-2 gap-4 mb-6">
+            <!-- Budget vs Spent by Year Chart -->
+            <div class="bg-white rounded-lg shadow-md p-4">
+                <h3 class="text-lg font-semibold text-gray-800 mb-4">Budget vs Spent by Year</h3>
+                <div class="chart-container"><canvas id="budget-year-chart"></canvas></div>
+            </div>
+
+            <!-- Expenses by Category Chart -->
+            <div class="bg-white rounded-lg shadow-md p-4">
+                <h3 class="text-lg font-semibold text-gray-800 mb-4">Expenses by Category</h3>
+                <div class="chart-container"><canvas id="expense-category-chart"></canvas></div>
+            </div>
+        </div>
+
+        <!-- Yearly Breakdown Table -->
+        <div class="bg-white rounded-lg shadow-md p-4 mb-6">
+            <h3 class="text-lg font-semibold text-gray-800 mb-4">Yearly Breakdown</h3>
+            <div class="overflow-x-auto">
+                <table class="min-w-full text-sm">
+                    <thead>
+                        <tr class="border-b border-gray-300 bg-gray-50">
+                            <th class="p-3 text-left font-semibold text-gray-700">Year</th>
+                            <th class="p-3 text-right font-semibold text-gray-700">Budget</th>
+                            <th class="p-3 text-right font-semibold text-gray-700">Spent</th>
+                            <th class="p-3 text-right font-semibold text-gray-700">Remaining</th>
+                            <th class="p-3 text-right font-semibold text-gray-700">Utilization</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${sortedYears.map(year => {
+                            const data = yearlyData[year];
+                            const remaining = data.budget - data.spent;
+                            const utilization = data.budget > 0 ? Math.round((data.spent / data.budget) * 100) : 0;
+                            const utilizationColor = utilization > 100 ? 'text-red-600' : utilization > 80 ? 'text-yellow-600' : 'text-green-600';
+                            return `
+                                <tr class="border-b border-gray-200 hover:bg-gray-50">
+                                    <td class="p-3 font-medium text-gray-800">${year}</td>
+                                    <td class="p-3 text-right text-gray-700">$${Math.round(data.budget).toLocaleString()}</td>
+                                    <td class="p-3 text-right text-gray-700">$${Math.round(data.spent).toLocaleString()}</td>
+                                    <td class="p-3 text-right ${remaining >= 0 ? 'text-green-600' : 'text-red-600'}">$${Math.round(remaining).toLocaleString()}</td>
+                                    <td class="p-3 text-right font-semibold ${utilizationColor}">${utilization}%</td>
+                                </tr>
+                            `;
+                        }).join('')}
+                        <tr class="border-t-2 border-gray-400 bg-gray-100 font-semibold">
+                            <td class="p-3">TOTAL</td>
+                            <td class="p-3 text-right">$${Math.round(totalBudget).toLocaleString()}</td>
+                            <td class="p-3 text-right">$${Math.round(totalSpent).toLocaleString()}</td>
+                            <td class="p-3 text-right ${totalRemaining >= 0 ? 'text-green-600' : 'text-red-600'}">$${Math.round(totalRemaining).toLocaleString()}</td>
+                            <td class="p-3 text-right">${totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0}%</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Project Budget Details -->
+        <div class="bg-white rounded-lg shadow-md p-4">
+            <h3 class="text-lg font-semibold text-gray-800 mb-4">Project Budget Details</h3>
+            <div class="overflow-x-auto">
+                <table class="min-w-full text-sm">
+                    <thead>
+                        <tr class="border-b border-gray-300 bg-gray-50">
+                            <th class="p-3 text-left font-semibold text-gray-700">Project</th>
+                            <th class="p-3 text-left font-semibold text-gray-700">Year</th>
+                            <th class="p-3 text-left font-semibold text-gray-700">Status</th>
+                            <th class="p-3 text-right font-semibold text-gray-700">Budget</th>
+                            <th class="p-3 text-right font-semibold text-gray-700">Spent</th>
+                            <th class="p-3 text-right font-semibold text-gray-700">Remaining</th>
+                            <th class="p-3 text-right font-semibold text-gray-700">Utilization</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${filteredProjects.filter(p => p.budget > 0).sort((a, b) => b.budget - a.budget).map(p => {
+                            const remaining = p.budget - p.spent;
+                            const utilization = p.budget > 0 ? Math.round((p.spent / p.budget) * 100) : 0;
+                            const utilizationColor = utilization > 100 ? 'text-red-600' : utilization > 80 ? 'text-yellow-600' : 'text-green-600';
+                            const statusColors = {
+                                'Active': 'bg-green-100 text-green-700',
+                                'On Hold': 'bg-yellow-100 text-yellow-700',
+                                'Completed': 'bg-blue-100 text-blue-700',
+                                'Cancelled': 'bg-red-100 text-red-700',
+                                'Planned': 'bg-gray-100 text-gray-700'
+                            };
+                            const startYear = p.startDate ? p.startDate.split('-')[0] : '';
+                            const endYear = p.endDate ? p.endDate.split('-')[0] : '';
+                            const yearDisplay = startYear === endYear ? startYear : (startYear && endYear ? startYear + '-' + endYear : startYear || endYear);
+                            return `
+                                <tr class="border-b border-gray-200 hover:bg-gray-50">
+                                    <td class="p-3 font-medium text-gray-800">${p.name}</td>
+                                    <td class="p-3 text-gray-700">${yearDisplay}</td>
+                                    <td class="p-3"><span class="px-2 py-1 rounded text-xs ${statusColors[p.status] || 'bg-gray-100 text-gray-700'}">${p.status}</span></td>
+                                    <td class="p-3 text-right text-gray-700">$${p.budget.toLocaleString()}</td>
+                                    <td class="p-3 text-right text-gray-700">$${p.spent.toLocaleString()}</td>
+                                    <td class="p-3 text-right ${remaining >= 0 ? 'text-green-600' : 'text-red-600'}">$${remaining.toLocaleString()}</td>
+                                    <td class="p-3 text-right font-semibold ${utilizationColor}">${utilization}%</td>
+                                </tr>
+                            `;
+                        }).join('')}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    `;
+
+    // Render Budget vs Spent chart
+    renderBudgetYearChart(sortedYears, yearlyData);
+
+    // Render Category chart
+    renderExpenseCategoryChart(categoryTotals);
+}
+
+function renderBudgetYearChart(years, yearlyData) {
+    const ctx = document.getElementById('budget-year-chart');
+    if (!ctx) return;
+
+    if (budgetChartInstance) {
+        budgetChartInstance.destroy();
+    }
+
+    budgetChartInstance = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: years,
+            datasets: [
+                {
+                    label: 'Budget',
+                    data: years.map(y => Math.round(yearlyData[y].budget)),
+                    backgroundColor: '#3b82f6',
+                    borderRadius: 4
+                },
+                {
+                    label: 'Spent',
+                    data: years.map(y => Math.round(yearlyData[y].spent)),
+                    backgroundColor: '#ef4444',
+                    borderRadius: 4
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: {
+                        callback: value => '$' + value.toLocaleString()
+                    }
+                }
+            },
+            plugins: {
+                legend: { display: true, position: 'top' },
+                tooltip: {
+                    callbacks: {
+                        label: context => context.dataset.label + ': $' + context.raw.toLocaleString()
+                    }
+                }
+            }
+        }
+    });
+}
+
+function renderExpenseCategoryChart(categoryTotals) {
+    const ctx = document.getElementById('expense-category-chart');
+    if (!ctx) return;
+
+    if (expenseCategoryChartInstance) {
+        expenseCategoryChartInstance.destroy();
+    }
+
+    const categories = Object.keys(categoryTotals);
+    const values = Object.values(categoryTotals);
+    const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316'];
+
+    expenseCategoryChartInstance = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+            labels: categories,
+            datasets: [{
+                data: values,
+                backgroundColor: colors.slice(0, categories.length),
+                borderWidth: 2,
+                borderColor: '#fff'
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: true, position: 'right' },
+                tooltip: {
+                    callbacks: {
+                        label: context => context.label + ': $' + context.raw.toLocaleString()
+                    }
+                }
+            }
+        }
+    });
 }
