@@ -329,11 +329,44 @@ OperationsDash/
 
 ---
 
+## Git Workflow & Database Protection
+
+### CRITICAL: Database File Protection
+
+> [!CAUTION]
+> **NEVER PUSH DATABASE FILES TO GIT!**
+> 
+> The server is the **ONLY** source of truth for the database. All users pull updated databases from the server, but **USERS SHOULD NEVER PUSH DB UPDATES TO GIT**.
+
+**Configure Git to Ignore Database Changes**:
+
+Every time you clone or work with this repository, run this command to ensure the database file is never accidentally committed:
+
+```powershell
+git update-index --assume-unchanged instance/operations.db
+```
+
+This tells Git to ignore any local changes to the database file, even if it exists.
+
+**What This Means**:
+- Your local database changes stay local
+- Only the server pushes database updates
+- You pull the latest DB from the server when needed
+- No risk of overwriting production data
+
+---
+
 ## Deploying Changes to Production
 
-**CRITICAL**: Database schema changes need special handling!
+> [!IMPORTANT]
+> **EVERY TIME** you push updates to GitHub, you **MUST** notify Tom Wilcox to apply the updates to the server.
 
-When you've made changes locally and want to deploy to the production server:
+### Deployment Contact:
+- **Name**: Tom Wilcox
+- **Email**: twilcox@proterra.com
+- **Phone**: 864.395.3591
+
+### Deployment Workflow:
 
 1. **Commit your changes**:
    ```powershell
@@ -342,19 +375,34 @@ When you've made changes locally and want to deploy to the production server:
    git push
    ```
 
-2. **On the production server**:
+2. **IMMEDIATELY Notify Tom Wilcox**:
+   
+   Send an email or call to inform that updates have been pushed:
+   
+   > "Hi Tom, I've just pushed updates to the Operations Dashboard GitHub repository. Please apply the changes to the server when you have a chance. Changes include: [brief description]."
+
+3. **Wait for Confirmation**:
+   - Tom will pull the changes on the server
+   - He'll run any necessary migration scripts
+   - He'll restart the service
+   - You'll receive confirmation when deployment is complete
+
+4. **Production Server Deployment** (Tom's steps):
    ```bash
+   cd /path/to/OperationsDash
    git pull
    source venv/bin/activate  # Linux
    pip install -r requirements.txt
-   # Flask will auto-create new columns on restart (they're nullable)
+   # Run migration script if database schema changed
+   python migrate_db.py
    sudo systemctl restart operationsdash
    ```
 
-3. **Database Migration Safety**:
+5. **Database Migration Safety**:
    - All new columns in this project are nullable (optional)
    - Existing data will NOT be lost
    - New columns will have NULL values for existing records
+   - The `migrate_db.py` script handles schema updates safely
    - This is safe for production deployment
 
 ---

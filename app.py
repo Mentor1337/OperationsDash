@@ -108,6 +108,7 @@ class Project(db.Model):
     milestones = db.relationship('Milestone', backref='project', cascade='all, delete-orphan', lazy=True)
     tasks = db.relationship('Task', backref='project', cascade='all, delete-orphan', lazy=True)
     change_history = db.relationship('ChangeHistory', backref='project', cascade='all, delete-orphan', lazy=True)
+    jira_issues = db.relationship('ProjectJiraIssue', backref='project', cascade='all, delete-orphan', lazy=True)
     
     def to_dict(self):
         owner_name = self.owner.name if self.owner else 'Unassigned'
@@ -126,7 +127,8 @@ class Project(db.Model):
             'spent': self.spent,
             'notes': self.notes,
             'location': self.location,
-            'jiraKey': self.jira_key,
+            'jiraKey': self.jira_key,  # Kept for backward compatibility
+            'jiraKeys': [ji.jira_key for ji in self.jira_issues],  # New array of Jira keys
             'expenses': [e.to_dict() for e in self.expenses],
             'milestones': [m.to_dict() for m in self.milestones],
             'tasks': [t.to_dict() for t in self.tasks],
@@ -198,6 +200,7 @@ class Task(db.Model):
         }
 
 
+
 class ChangeHistory(db.Model):
     __tablename__ = 'change_history'
     id = db.Column(db.Integer, primary_key=True)
@@ -216,6 +219,26 @@ class ChangeHistory(db.Model):
             'newValue': self.new_value,
             'changedAt': self.changed_at.isoformat() if self.changed_at else None,
             'changedBy': self.changed_by
+        }
+
+
+class ProjectJiraIssue(db.Model):
+    """Junction table for many-to-many relationship between Projects and Jira issues"""
+    __tablename__ = 'project_jira_issues'
+    id = db.Column(db.Integer, primary_key=True)
+    project_id = db.Column(db.Integer, db.ForeignKey('projects.id'), nullable=False)
+    jira_key = db.Column(db.String(50), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Ensure no duplicate jira keys per project
+    __table_args__ = (db.UniqueConstraint('project_id', 'jira_key', name='uq_project_jira_key'),)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'projectId': self.project_id,
+            'jiraKey': self.jira_key,
+            'createdAt': self.created_at.isoformat() if self.created_at else None
         }
 
 
@@ -448,6 +471,60 @@ def delete_project(id):
     project = Project.query.get_or_404(id)
     db.session.delete(project)
     db.session.commit()
+    return '', 204
+
+
+# ============================================================================
+# API Routes - Project Jira Issues
+# ============================================================================
+
+@app.route('/api/projects/<int:project_id>/jira', methods=['GET'])
+def get_project_jira_issues(project_id):
+    """Get all Jira issues for a project"""
+    project = Project.query.get_or_404(project_id)
+    return jsonify([ji.to_dict() for ji in project.jira_issues])
+
+
+@app.route('/api/projects/<int:project_id>/jira', methods=['POST'])
+def add_project_jira_issue(project_id):
+    """Add a Jira issue to a project"""
+    project = Project.query.get_or_404(project_id)
+    data = request.get_json()
+    
+    jira_key = data.get('jiraKey', '').strip()
+    if not jira_key:
+        return jsonify({'error': 'jiraKey is required'}), 400
+    
+    # Check if this Jira key already exists for this project
+    existing = ProjectJiraIssue.query.filter_by(
+        project_id=project_id,
+        jira_key=jira_key
+    ).first()
+    
+    if existing:
+        return jsonify({'error': f'Jira issue {jira_key} is already linked to this project'}), 400
+    
+    jira_issue = ProjectJiraIssue(
+        project_id=project_id,
+        jira_key=jira_key
+    )
+    db.session.add(jira_issue)
+    db.session.commit()
+    
+    return jsonify(jira_issue.to_dict()), 201
+
+
+@app.route('/api/projects/<int:project_id>/jira/<jira_key>', methods=['DELETE'])
+def delete_project_jira_issue(project_id, jira_key):
+    """Remove a Jira issue from a project"""
+    jira_issue = ProjectJiraIssue.query.filter_by(
+        project_id=project_id,
+        jira_key=jira_key
+    ).first_or_404()
+    
+    db.session.delete(jira_issue)
+    db.session.commit()
+    
     return '', 204
 
 
@@ -1201,10 +1278,58 @@ def seed_database():
 # Application Entry Point
 # ============================================================================
 
+
+# ============================================================================
+# Database Migration - Jira Keys
+# ============================================================================
+
+def migrate_jira_keys():
+    """
+    Migrate existing jira_key values from projects table to project_jira_issues table.
+    This is a safe one-time migration that preserves all existing data.
+    """
+    print("Checking for Jira key migration...")
+    
+    # Get all projects with jira_key set
+    projects_with_keys = Project.query.filter(Project.jira_key.isnot(None), Project.jira_key != '').all()
+    
+    migrated_count = 0
+    skipped_count = 0
+    
+    for project in projects_with_keys:
+        # Check if this key is already in the junction table
+        existing = ProjectJiraIssue.query.filter_by(
+            project_id=project.id,
+            jira_key=project.jira_key
+        ).first()
+        
+        if not existing:
+            # Migrate the key
+            jira_issue = ProjectJiraIssue(
+                project_id=project.id,
+                jira_key=project.jira_key
+            )
+            db.session.add(jira_issue)
+            migrated_count += 1
+        else:
+            skipped_count += 1
+    
+    if migrated_count > 0:
+        db.session.commit()
+        print(f"✓ Migrated {migrated_count} Jira key(s) to new table")
+    
+    if skipped_count > 0:
+        print(f"✓ Skipped {skipped_count} already-migrated key(s)")
+    
+    if migrated_count == 0 and skipped_count == 0:
+        print("✓ No Jira keys to migrate")
+
+
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
         seed_database()
+        migrate_jira_keys()  # Run migration after database is set up
     
     print("\n" + "="*60)
     print("Operations Dashboard - Flask Application")

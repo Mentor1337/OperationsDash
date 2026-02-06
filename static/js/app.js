@@ -253,7 +253,9 @@ function createProjectCard(p) {
                             <div class="flex items-center space-x-3">
                                 <h3 class="text-lg font-semibold text-gray-800">${p.name}</h3>
                                 <span class="px-3 py-1 rounded-full text-xs font-medium border ${statusClass}">${p.status}</span>
-                                ${p.jiraKey ? `<button onclick="event.stopPropagation(); openJiraModal('${p.jiraKey}', '${p.name}')" class="px-2 py-1 bg-blue-50 text-blue-700 text-xs rounded border border-blue-200 hover:bg-blue-100 font-mono">${p.jiraKey}</button>` : ''}
+                                ${p.jiraKeys && p.jiraKeys.length > 0 ? p.jiraKeys.map(key => 
+                                    `<button onclick="event.stopPropagation(); openJiraModal('${key}', '${p.name}')" class="px-2 py-1 bg-blue-50 text-blue-700 text-xs rounded border border-blue-200 hover:bg-blue-100 font-mono">${key}</button>`
+                                ).join(' ') : ''}
                             </div>
                             <div class="mt-2 flex items-center space-x-4 text-sm text-gray-600">
                                 <span class="flex items-center space-x-1">
@@ -395,7 +397,8 @@ function openProjectModal(id = null) {
         document.getElementById('project-budget').value = p.budget;
         document.getElementById('project-spent').value = p.spent;
         document.getElementById('project-notes').value = p.notes || '';
-        document.getElementById('project-jira-key').value = p.jiraKey || '';
+        // Load Jira issues for this project
+        loadProjectJiraIssues(p.id);
     } else {
         title.textContent = 'New Project';
         deleteBtn.classList.add('hidden');
@@ -403,6 +406,8 @@ function openProjectModal(id = null) {
         document.getElementById('project-id').value = '';
         const today = new Date().toISOString().split('T')[0];
         document.getElementById('project-start-date').value = today;
+        // Clear Jira issues list for new project
+        document.getElementById('project-jira-list').innerHTML = '';
     }
     
     modal.classList.remove('hidden');
@@ -422,8 +427,8 @@ async function saveProject(e) {
         estimatedHoursPerWeek: parseInt(document.getElementById('project-hours').value) || 0,
         budget: parseFloat(document.getElementById('project-budget').value) || 0,
         spent: parseFloat(document.getElementById('project-spent').value) || 0,
-        notes: document.getElementById('project-notes').value,
-        jiraKey: document.getElementById('project-jira-key').value || null
+        notes: document.getElementById('project-notes').value
+        // Note: jiraKey removed - now managed via separate API endpoints
     };
     
     try {
@@ -451,6 +456,102 @@ async function deleteProject() {
         showToast('Project deleted', 'success');
     } catch (err) {
         showToast('Failed to delete project', 'error');
+    }
+}
+
+// ============================================================================
+// Jira Issue Management (Multiple Issues Per Project)
+// ============================================================================
+
+async function loadProjectJiraIssues(projectId) {
+    const container = document.getElementById('project-jira-list');
+    container.innerHTML = '<span class="text-gray-500 text-sm">Loading...</span>';
+    
+    try {
+        const response = await fetch(`${API}/api/projects/${projectId}/jira`);
+        const jiraIssues = await response.json();
+        
+        renderJiraIssueList(jiraIssues);
+    } catch (err) {
+        console.error('Failed to load Jira issues:', err);
+        container.innerHTML = '<span class="text-red-500 text-sm">Failed to load Jira issues</span>';
+    }
+}
+
+function renderJiraIssueList(jiraIssues) {
+    const container = document.getElementById('project-jira-list');
+    
+    if (!jiraIssues || jiraIssues.length === 0) {
+        container.innerHTML = '<span class="text-gray-500 text-sm italic">No Jira issues linked yet</span>';
+        return;
+    }
+    
+    container.innerHTML = jiraIssues.map(ji => `
+        <div class="flex items-center space-x-1 px-2 py-1 bg-blue-50 text-blue-700 text-xs rounded border border-blue-200 font-mono">
+            <span>${ji.jiraKey}</span>
+            <button onclick="removeJiraIssueFromProject('${ji.jiraKey}')" 
+                    class="ml-1 text-blue-700 hover:text-blue-900 hover:bg-blue-100 rounded px-1"
+                    title="Remove ${ji.jiraKey}">
+                ×
+            </button>
+        </div>
+    `).join('');
+}
+
+async function addJiraIssueToProject() {
+    const projectId = document.getElementById('project-id').value;
+    const input = document.getElementById('project-jira-key-input');
+    const jiraKey = input.value.trim().toUpperCase();
+    
+    if (!jiraKey) {
+        showToast('Please enter a Jira key', 'error');
+        return;
+    }
+    
+    if (!projectId) {
+        showToast('Please save the project first before adding Jira issues', 'error');
+        return;
+    }
+    
+    try {
+        const response = await fetch(`${API}/api/projects/${projectId}/jira`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ jiraKey })
+        });
+        
+        if (!response.ok) {
+            const error = await response.json();
+            showToast(error.error || 'Failed to add Jira issue', 'error');
+            return;
+        }
+        
+        input.value = ''; // Clear input
+        await loadProjectJiraIssues(projectId); // Reload the list
+        await loadData(); // Refresh main project data
+        showToast(`Added ${jiraKey}`, 'success');
+    } catch (err) {
+        showToast('Failed to add Jira issue', 'error');
+        console.error(err);
+    }
+}
+
+async function removeJiraIssueFromProject(jiraKey) {
+    const projectId = document.getElementById('project-id').value;
+    
+    if (!confirm(`Remove ${jiraKey} from this project?`)) return;
+    
+    try {
+        await fetch(`${API}/api/projects/${projectId}/jira/${jiraKey}`, {
+            method: 'DELETE'
+        });
+        
+        await loadProjectJiraIssues(projectId); // Reload the list
+        await loadData(); // Refresh main project data
+        showToast(`Removed ${jiraKey}`, 'success');
+    } catch (err) {
+        showToast('Failed to remove Jira issue', 'error');
+        console.error(err);
     }
 }
 
