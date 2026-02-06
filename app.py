@@ -1316,13 +1316,13 @@ def migrate_jira_keys():
     
     if migrated_count > 0:
         db.session.commit()
-        print(f"✓ Migrated {migrated_count} Jira key(s) to new table")
+        print(f"[OK] Migrated {migrated_count} Jira key(s) to new table")
     
     if skipped_count > 0:
-        print(f"✓ Skipped {skipped_count} already-migrated key(s)")
+        print(f"[OK] Skipped {skipped_count} already-migrated key(s)")
     
     if migrated_count == 0 and skipped_count == 0:
-        print("✓ No Jira keys to migrate")
+        print("[OK] No Jira keys to migrate")
 
 
 if __name__ == '__main__':
