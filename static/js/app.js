@@ -95,7 +95,7 @@ function renderCurrentTab() {
 function renderProjects() {
     const container = document.getElementById('content-projects');
     const uniqueOwners = [...new Set(projects.map(p => p.owner).filter(Boolean))];
-    const locations = ['Module Line', 'Pack Line', 'Live Agnostic'];
+    const locations = ['Module Line', 'Pack Line', 'Line Agnostic'];
     const priorities = ['Critical', 'High', 'Medium', 'Low'];
     const statuses = ['On Track', 'At Risk', 'Behind', 'Planned', 'Completed', 'Cancelled'];
     const hasActiveFilters = ownerFilter !== 'all' || priorityFilter !== 'all' || statusFilter !== 'all' || locationFilter !== 'all';
@@ -1226,7 +1226,7 @@ function renderRoadmap() {
     const currentYear = new Date().getFullYear();
     const yearOptions = [currentYear - 1, currentYear, currentYear + 1, currentYear + 2, currentYear + 3, currentYear + 4];
     const uniqueOwners = [...new Set(projects.map(p => p.owner).filter(Boolean))];
-    const locations = ['Module Line', 'Pack Line', 'Live Agnostic'];
+    const locations = ['Module Line', 'Pack Line', 'Line Agnostic'];
     const priorities = ['Critical', 'High', 'Medium', 'Low'];
     const statuses = ['On Track', 'At Risk', 'Behind', 'Planned', 'Completed', 'Cancelled'];
     const hasActiveFilters = ownerFilter !== 'all' || priorityFilter !== 'all' || statusFilter !== 'all' || locationFilter !== 'all';
@@ -1863,11 +1863,20 @@ function renderResources() {
     
     const capacityData = engineers.map(eng => {
         const nonProjectTotal = eng.nonProjectTime.reduce((sum, item) => sum + item.hours, 0);
-        const projectHours = projects
+        const taskHours = projects
             .filter(p => !['Planned', 'Completed', 'Cancelled'].includes(p.status))
             .flatMap(p => p.tasks)
             .filter(t => t.engineer === eng.name)
             .reduce((sum, t) => sum + t.hoursPerWeek, 0);
+
+        // Include milestone hours for current week
+        const now = new Date();
+        const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const weekEnd = new Date(weekStart);
+        weekEnd.setDate(weekEnd.getDate() + 7);
+        const milestoneHours = getMilestoneHoursForEngineer(eng.name, weekStart, weekEnd);
+
+        const projectHours = taskHours + milestoneHours;
         const available = eng.totalHours - nonProjectTotal - projectHours;
         const utilization = Math.round(((eng.totalHours - available) / eng.totalHours) * 100);
         return { ...eng, nonProjectTotal, projectHours, available, utilization };
@@ -2402,26 +2411,70 @@ function renderIndividualTrendsChart() {
 
     const engineerColors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316', '#84cc16'];
 
+    // Store project details for tooltip access
+    const weekProjectDetails = {};
+
     const datasets = engineers.map((eng, idx) => {
         const baseColor = engineerColors[idx % engineerColors.length];
         const isSelected = selectedEngineers.has(eng.name);
 
-        const data = weeks.map(week => {
+        const data = weeks.map((week, weekIdx) => {
             const nonProject = eng.nonProjectTime.reduce((sum, item) => sum + item.hours, 0);
+
+            // Track projects contributing to this engineer's utilization
+            const contributingProjects = [];
+
             const projectHours = projects
                 .filter(p => {
                     const pStart = new Date(p.startDate);
                     const pEnd = new Date(p.endDate);
                     return pStart <= week.end && pEnd >= week.start;
                 })
-                .flatMap(p => p.tasks)
-                .filter(t => t.engineer === eng.name)
-                .reduce((sum, t) => sum + t.hoursPerWeek, 0);
+                .reduce((sum, p) => {
+                    const taskHours = p.tasks
+                        .filter(t => t.engineer === eng.name)
+                        .reduce((tSum, t) => tSum + t.hoursPerWeek, 0);
+                    if (taskHours > 0) {
+                        contributingProjects.push({ name: p.name, hours: taskHours, type: 'task' });
+                    }
+                    return sum + taskHours;
+                }, 0);
 
-            // Add milestone hours for this week
-            const milestoneHours = getMilestoneHoursForEngineer(eng.name, week.start, week.end);
+            // Add milestone hours for this week and track contributing projects
+            let milestoneHours = 0;
+            projects.forEach(project => {
+                project.milestones.forEach(milestone => {
+                    if (!milestone.startDate || !milestone.endDate) return;
+                    const mStart = new Date(milestone.startDate);
+                    const mEnd = new Date(milestone.endDate);
+                    if (mStart <= week.end && mEnd >= week.start) {
+                        const assignments = milestone.assignments || [];
+                        const assignment = assignments.find(a => a.engineer === eng.name);
+                        if (assignment) {
+                            milestoneHours += assignment.hoursPerWeek;
+                            contributingProjects.push({
+                                name: project.name,
+                                milestone: milestone.name,
+                                hours: assignment.hoursPerWeek,
+                                type: 'milestone'
+                            });
+                        }
+                    }
+                });
+            });
 
             const utilization = ((nonProject + projectHours + milestoneHours) / eng.totalHours) * 100;
+
+            // Store project details for this data point
+            const key = `${eng.name}-${weekIdx}`;
+            weekProjectDetails[key] = {
+                utilization: Math.round(utilization),
+                nonProject: nonProject,
+                projectHours: projectHours,
+                milestoneHours: milestoneHours,
+                projects: contributingProjects
+            };
+
             return Math.round(utilization);
         });
 
@@ -2435,6 +2488,9 @@ function renderIndividualTrendsChart() {
             hidden: !isSelected && capacityViewMode === 'individual'
         };
     });
+
+    // Store for tooltip access
+    window.weekProjectDetails = weekProjectDetails;
 
     const weekLabels = weeks.map(w => w.label);
 
@@ -2470,7 +2526,55 @@ function renderIndividualTrendsChart() {
                 }
             },
             plugins: {
-                legend: { display: false }
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            const engineerName = context.dataset.label;
+                            const weekIdx = context.dataIndex;
+                            const key = `${engineerName}-${weekIdx}`;
+                            const details = window.weekProjectDetails[key];
+
+                            if (!details) {
+                                return `${engineerName}: ${context.raw}%`;
+                            }
+
+                            const lines = [`${engineerName}: ${details.utilization}%`];
+
+                            if (details.projects.length > 0) {
+                                // Group by project name to consolidate tasks and milestones
+                                const projectMap = {};
+                                details.projects.forEach(p => {
+                                    if (!projectMap[p.name]) {
+                                        projectMap[p.name] = { hours: 0, milestones: [] };
+                                    }
+                                    projectMap[p.name].hours += p.hours;
+                                    if (p.type === 'milestone' && p.milestone) {
+                                        projectMap[p.name].milestones.push(p.milestone);
+                                    }
+                                });
+
+                                lines.push('  Projects:');
+                                Object.keys(projectMap).forEach(projName => {
+                                    const info = projectMap[projName];
+                                    let label = `    • ${projName} (${info.hours}h)`;
+                                    if (info.milestones.length > 0) {
+                                        label += ` [${info.milestones.join(', ')}]`;
+                                    }
+                                    lines.push(label);
+                                });
+                            } else {
+                                lines.push('  No project work');
+                            }
+
+                            if (details.nonProject > 0) {
+                                lines.push(`  Non-Project: ${details.nonProject}h`);
+                            }
+
+                            return lines;
+                        }
+                    }
+                }
             }
         }
     });
@@ -2527,11 +2631,11 @@ function renderMonthlyBreakdownTable() {
                                       utilization > 85 ? 'text-yellow-600' :
                                       'text-green-600';
 
+                const totalProjectHours = projectHours + milestoneHours;
                 cells.push(`
                     <td class="p-2 text-center">
                         <div class="text-xs">
-                            <div class="text-gray-600">P:${projectHours}</div>
-                            <div class="text-gray-600">M:${milestoneHours}</div>
+                            <div class="text-gray-600">P:${totalProjectHours}</div>
                             <div class="text-gray-600">NP:${nonProject}</div>
                             <div class="text-gray-600">A:${available}</div>
                             <div class="font-semibold mt-1 ${utilizationColor}">${utilization}%</div>
@@ -2587,11 +2691,11 @@ function renderMonthlyBreakdownTable() {
                                   totalUtilization > 85 ? 'text-yellow-600' :
                                   'text-green-600';
 
+            const totalProjectCombined = totalProject + totalMilestone;
             totalCells.push(`
                 <td class="p-2 text-center">
                     <div class="text-xs">
-                        <div class="text-gray-700">P:${totalProject}</div>
-                        <div class="text-gray-700">M:${totalMilestone}</div>
+                        <div class="text-gray-700">P:${totalProjectCombined}</div>
                         <div class="text-gray-700">NP:${totalNonProject}</div>
                         <div class="text-gray-700">A:${totalAvailable}</div>
                         <div class="font-bold mt-1 ${utilizationColor}">${totalUtilization}%</div>
@@ -2879,7 +2983,7 @@ function renderBudget() {
 
     // Filter options
     const uniqueOwners = [...new Set(projects.map(p => p.owner).filter(Boolean))];
-    const locations = ['Module Line', 'Pack Line', 'Live Agnostic'];
+    const locations = ['Module Line', 'Pack Line', 'Line Agnostic'];
     const priorities = ['Critical', 'High', 'Medium', 'Low'];
     const statuses = ['On Track', 'At Risk', 'Behind', 'Planned', 'Completed', 'Cancelled'];
 

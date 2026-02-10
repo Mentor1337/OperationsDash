@@ -116,7 +116,7 @@ class Project(db.Model):
     budget = db.Column(db.Float, default=0)
     spent = db.Column(db.Float, default=0)
     notes = db.Column(db.Text)
-    location = db.Column(db.String(50))  # Module Line, Pack Line, or Live Agnostic
+    location = db.Column(db.String(50))  # Module Line, Pack Line, or Line Agnostic
     jira_key = db.Column(db.String(50))  # Jira project/issue key (e.g., PROJ-123)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
