@@ -85,6 +85,23 @@ class EngineerNonProjectTime(db.Model):
         }
 
 
+class ProjectYearlyBudget(db.Model):
+    __tablename__ = 'project_yearly_budgets'
+    id = db.Column(db.Integer, primary_key=True)
+    project_id = db.Column(db.Integer, db.ForeignKey('projects.id'), nullable=False)
+    year = db.Column(db.Integer, nullable=False)
+    amount = db.Column(db.Float, nullable=False, default=0)
+
+    __table_args__ = (db.UniqueConstraint('project_id', 'year'),)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'year': self.year,
+            'amount': self.amount
+        }
+
+
 class Project(db.Model):
     __tablename__ = 'projects'
     id = db.Column(db.Integer, primary_key=True)
@@ -109,6 +126,7 @@ class Project(db.Model):
     tasks = db.relationship('Task', backref='project', cascade='all, delete-orphan', lazy=True)
     change_history = db.relationship('ChangeHistory', backref='project', cascade='all, delete-orphan', lazy=True)
     jira_issues = db.relationship('ProjectJiraIssue', backref='project', cascade='all, delete-orphan', lazy=True)
+    yearly_budgets = db.relationship('ProjectYearlyBudget', backref='project', cascade='all, delete-orphan', lazy=True)
     
     def to_dict(self):
         owner_name = self.owner.name if self.owner else 'Unassigned'
@@ -132,7 +150,8 @@ class Project(db.Model):
             'expenses': [e.to_dict() for e in self.expenses],
             'milestones': [m.to_dict() for m in self.milestones],
             'tasks': [t.to_dict() for t in self.tasks],
-            'changeHistory': [ch.to_dict() for ch in self.change_history]
+            'changeHistory': [ch.to_dict() for ch in self.change_history],
+            'yearlyBudgets': [yb.to_dict() for yb in self.yearly_budgets]
         }
 
 
@@ -178,6 +197,30 @@ class Milestone(db.Model):
             'status': self.status,
             'startDate': self.start_date.isoformat() if self.start_date else None,
             'endDate': self.end_date.isoformat() if self.end_date else None,
+            'hoursPerWeek': self.hours_per_week,
+            'assignments': [a.to_dict() for a in self.assignments]
+        }
+
+
+class MilestoneAssignment(db.Model):
+    __tablename__ = 'milestone_assignments'
+    id = db.Column(db.Integer, primary_key=True)
+    milestone_id = db.Column(db.Integer, db.ForeignKey('milestones.id'), nullable=False)
+    engineer_id = db.Column(db.Integer, db.ForeignKey('engineers.id'), nullable=False)
+    hours_per_week = db.Column(db.Integer, nullable=False)
+
+    __table_args__ = (db.UniqueConstraint('milestone_id', 'engineer_id'),)
+
+    # Relationships
+    milestone = db.relationship('Milestone', backref=db.backref('assignments', cascade='all, delete-orphan', lazy=True))
+    engineer = db.relationship('Engineer', backref=db.backref('milestone_assignments', cascade='all, delete-orphan', lazy=True))
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'milestoneId': self.milestone_id,
+            'engineerId': self.engineer_id,
+            'engineer': self.engineer.name if self.engineer else None,
             'hoursPerWeek': self.hours_per_week
         }
 
@@ -299,6 +342,11 @@ def update_engineer(id):
 @app.route('/api/engineers/<int:id>', methods=['DELETE'])
 def delete_engineer(id):
     engineer = Engineer.query.get_or_404(id)
+
+    # Clear ownership from any projects this engineer owns
+    for project in engineer.owned_projects:
+        project.owner_id = None
+
     db.session.delete(engineer)
     db.session.commit()
     return '', 204
@@ -384,6 +432,19 @@ def create_project():
         jira_key=data.get('jiraKey')
     )
     db.session.add(project)
+    db.session.flush()  # Get the project ID
+
+    # Add yearly budgets if provided
+    if 'yearlyBudgets' in data:
+        for yb in data['yearlyBudgets']:
+            if yb.get('amount', 0) > 0:
+                yearly_budget = ProjectYearlyBudget(
+                    project_id=project.id,
+                    year=yb['year'],
+                    amount=yb['amount']
+                )
+                db.session.add(yearly_budget)
+
     db.session.commit()
     return jsonify(project.to_dict()), 201
 
@@ -450,6 +511,20 @@ def update_project(id):
     if 'jiraKey' in data:
         project.jira_key = data['jiraKey']
     
+    # Handle yearly budgets
+    if 'yearlyBudgets' in data:
+        # Clear existing yearly budgets
+        ProjectYearlyBudget.query.filter_by(project_id=project.id).delete()
+        # Add new yearly budgets
+        for yb in data['yearlyBudgets']:
+            if yb.get('amount', 0) > 0:
+                yearly_budget = ProjectYearlyBudget(
+                    project_id=project.id,
+                    year=yb['year'],
+                    amount=yb['amount']
+                )
+                db.session.add(yearly_budget)
+
     # Record changes
     changed_by = project.owner.name if project.owner else 'System'
     for field, old_val, new_val in changes:
@@ -461,7 +536,7 @@ def update_project(id):
             changed_by=changed_by
         )
         db.session.add(ch)
-    
+
     db.session.commit()
     return jsonify(project.to_dict())
 
@@ -594,9 +669,9 @@ def delete_expense(id):
 
 @app.route('/api/projects/<int:project_id>/milestones', methods=['POST'])
 def add_milestone(project_id):
-    Project.query.get_or_404(project_id)
+    project = Project.query.get_or_404(project_id)
     data = request.get_json()
-    
+
     milestone = Milestone(
         project_id=project_id,
         name=data['name'],
@@ -605,6 +680,22 @@ def add_milestone(project_id):
         status=data.get('status', 'pending')
     )
     db.session.add(milestone)
+    db.session.flush()  # Get milestone ID before recalculating
+
+    # Auto-calculate milestone date ranges
+    recalculate_milestone_dates(project_id)
+
+    # Record change history
+    changed_by = project.owner.name if project.owner else 'System'
+    ch = ChangeHistory(
+        project_id=project_id,
+        field=f'Milestone Added',
+        old_value='',
+        new_value=f'{milestone.name} ({data["plannedDate"]})',
+        changed_by=changed_by
+    )
+    db.session.add(ch)
+
     db.session.commit()
     return jsonify(milestone.to_dict()), 201
 
@@ -612,17 +703,48 @@ def add_milestone(project_id):
 @app.route('/api/milestones/<int:id>', methods=['PUT'])
 def update_milestone(id):
     milestone = Milestone.query.get_or_404(id)
+    project = milestone.project
     data = request.get_json()
-    
-    if 'name' in data:
+
+    # Track changes for history
+    changes = []
+    milestone_name = milestone.name  # Store original name for change tracking
+
+    if 'name' in data and data['name'] != milestone.name:
+        changes.append((f'Milestone "{milestone_name}" Name', milestone.name, data['name']))
         milestone.name = data['name']
+        milestone_name = data['name']  # Update for subsequent change messages
     if 'plannedDate' in data:
+        old_date = milestone.planned_date.strftime('%Y-%m-%d') if milestone.planned_date else ''
+        if old_date != data['plannedDate']:
+            changes.append((f'Milestone "{milestone_name}" Planned Date', old_date, data['plannedDate']))
         milestone.planned_date = datetime.strptime(data['plannedDate'], '%Y-%m-%d').date()
     if 'actualDate' in data:
+        old_date = milestone.actual_date.strftime('%Y-%m-%d') if milestone.actual_date else ''
+        new_date = data['actualDate'] or ''
+        if old_date != new_date:
+            changes.append((f'Milestone "{milestone_name}" Actual Date', old_date, new_date))
         milestone.actual_date = datetime.strptime(data['actualDate'], '%Y-%m-%d').date() if data['actualDate'] else None
-    if 'status' in data:
+    if 'status' in data and data['status'] != milestone.status:
+        changes.append((f'Milestone "{milestone_name}" Status', milestone.status, data['status']))
         milestone.status = data['status']
-    
+
+    # Auto-calculate milestone date ranges if planned date changed
+    if 'plannedDate' in data:
+        recalculate_milestone_dates(milestone.project_id)
+
+    # Record changes
+    changed_by = project.owner.name if project.owner else 'System'
+    for field, old_val, new_val in changes:
+        ch = ChangeHistory(
+            project_id=project.id,
+            field=field,
+            old_value=str(old_val) if old_val else '',
+            new_value=str(new_val) if new_val else '',
+            changed_by=changed_by
+        )
+        db.session.add(ch)
+
     db.session.commit()
     return jsonify(milestone.to_dict())
 
@@ -630,7 +752,118 @@ def update_milestone(id):
 @app.route('/api/milestones/<int:id>', methods=['DELETE'])
 def delete_milestone(id):
     milestone = Milestone.query.get_or_404(id)
+    project = milestone.project
+    project_id = milestone.project_id
+    milestone_name = milestone.name
+    milestone_date = milestone.planned_date.strftime('%Y-%m-%d') if milestone.planned_date else ''
+
     db.session.delete(milestone)
+
+    # Recalculate dates for remaining milestones
+    recalculate_milestone_dates(project_id)
+
+    # Record change history
+    changed_by = project.owner.name if project.owner else 'System'
+    ch = ChangeHistory(
+        project_id=project_id,
+        field='Milestone Deleted',
+        old_value=f'{milestone_name} ({milestone_date})',
+        new_value='',
+        changed_by=changed_by
+    )
+    db.session.add(ch)
+
+    db.session.commit()
+    return '', 204
+
+
+# ============================================================================
+# API Routes - Milestone Assignments
+# ============================================================================
+
+def recalculate_milestone_dates(project_id):
+    """Auto-calculate start/end dates for all milestones based on planned_date ordering"""
+    project = Project.query.get(project_id)
+    if not project or not project.start_date:
+        return
+
+    # Get milestones sorted by planned_date
+    milestones = sorted(project.milestones, key=lambda m: m.planned_date)
+
+    if not milestones:
+        return
+
+    # First milestone: project start -> milestone 1 planned_date
+    prev_date = project.start_date
+
+    for milestone in milestones:
+        milestone.start_date = prev_date
+        milestone.end_date = milestone.planned_date
+        prev_date = milestone.planned_date
+
+
+@app.route('/api/milestones/<int:milestone_id>/assignments', methods=['GET'])
+def get_milestone_assignments(milestone_id):
+    """Get all engineer assignments for a milestone"""
+    milestone = Milestone.query.get_or_404(milestone_id)
+    return jsonify([a.to_dict() for a in milestone.assignments])
+
+
+@app.route('/api/milestones/<int:milestone_id>/assignments', methods=['POST'])
+def add_milestone_assignment(milestone_id):
+    """Assign an engineer to a milestone"""
+    milestone = Milestone.query.get_or_404(milestone_id)
+    data = request.get_json()
+
+    engineer_id = data.get('engineerId')
+    if not engineer_id:
+        return jsonify({'error': 'engineerId is required'}), 400
+
+    # Check engineer exists
+    engineer = Engineer.query.get(engineer_id)
+    if not engineer:
+        return jsonify({'error': 'Engineer not found'}), 404
+
+    # Check for existing assignment
+    existing = MilestoneAssignment.query.filter_by(
+        milestone_id=milestone_id,
+        engineer_id=engineer_id
+    ).first()
+    if existing:
+        return jsonify({'error': 'Engineer already assigned to this milestone'}), 400
+
+    assignment = MilestoneAssignment(
+        milestone_id=milestone_id,
+        engineer_id=engineer_id,
+        hours_per_week=data.get('hoursPerWeek', 0)
+    )
+    db.session.add(assignment)
+
+    # Recalculate milestone dates for the project
+    recalculate_milestone_dates(milestone.project_id)
+
+    db.session.commit()
+    return jsonify(assignment.to_dict()), 201
+
+
+@app.route('/api/milestone-assignments/<int:id>', methods=['PUT'])
+def update_milestone_assignment(id):
+    """Update an existing milestone assignment"""
+    assignment = MilestoneAssignment.query.get_or_404(id)
+    data = request.get_json()
+
+    if 'hoursPerWeek' in data:
+        assignment.hours_per_week = data['hoursPerWeek']
+
+    db.session.commit()
+    return jsonify(assignment.to_dict())
+
+
+@app.route('/api/milestone-assignments/<int:id>', methods=['DELETE'])
+def delete_milestone_assignment(id):
+    """Remove an engineer assignment from a milestone"""
+    assignment = MilestoneAssignment.query.get_or_404(id)
+    db.session.delete(assignment)
     db.session.commit()
     return '', 204
 

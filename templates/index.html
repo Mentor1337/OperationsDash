@@ -43,6 +43,10 @@
 				class="tab-btn px-4 py-2 font-medium text-gray-600 hover:text-gray-800">
 				Resources
 			</button>
+			<button onclick="setTab('budget')" id="tab-budget"
+				class="tab-btn px-4 py-2 font-medium text-gray-600 hover:text-gray-800">
+				Budget
+			</button>
 		</div>
 
 		<!-- Tab Content -->
@@ -50,6 +54,7 @@
 		<div id="content-roadmap" class="tab-content hidden"></div>
 		<div id="content-milestones" class="tab-content hidden"></div>
 		<div id="content-resources" class="tab-content hidden"></div>
+		<div id="content-budget" class="tab-content hidden"></div>
 	</div>
 
 	<!-- Project Edit Modal -->
@@ -119,12 +124,12 @@
 					<div class="grid grid-cols-2 gap-4">
 						<div>
 							<label class="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
-							<input type="date" id="project-start-date"
+							<input type="date" id="project-start-date" onchange="updateYearlyBudgetUI()"
 								class="w-full px-3 py-2 border border-gray-300 rounded-lg">
 						</div>
 						<div>
 							<label class="block text-sm font-medium text-gray-700 mb-1">End Date</label>
-							<input type="date" id="project-end-date"
+							<input type="date" id="project-end-date" onchange="updateYearlyBudgetUI()"
 								class="w-full px-3 py-2 border border-gray-300 rounded-lg">
 						</div>
 					</div>
@@ -135,15 +140,21 @@
 					</div>
 					<div class="grid grid-cols-2 gap-4">
 						<div>
-							<label class="block text-sm font-medium text-gray-700 mb-1">Budget ($)</label>
+							<label class="block text-sm font-medium text-gray-700 mb-1">Total Budget ($)</label>
 							<input type="number" id="project-budget" min="0" step="0.01"
-								class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+								class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="updateYearlyBudgetUI()">
 						</div>
 						<div>
 							<label class="block text-sm font-medium text-gray-700 mb-1">Spent ($)</label>
 							<input type="number" id="project-spent" min="0" step="0.01"
 								class="w-full px-3 py-2 border border-gray-300 rounded-lg">
 						</div>
+					</div>
+					<!-- Yearly Budget Allocation -->
+					<div id="yearly-budget-section" class="hidden">
+						<label class="block text-sm font-medium text-gray-700 mb-2">Budget by Year</label>
+						<div id="yearly-budget-list" class="space-y-2 bg-gray-50 rounded-lg p-3"></div>
+						<p id="yearly-budget-warning" class="text-xs text-red-600 mt-1 hidden">Warning: Yearly allocations don't match total budget</p>
 					</div>
 					<div>
 						<label class="block text-sm font-medium text-gray-700 mb-1">Notes</label>
@@ -327,27 +338,10 @@
 						</select>
 					</div>
 				</div>
-				<!-- Optional Capacity Planning Fields -->
-				<div class="col-span-2 border-t pt-3 mt-2">
-					<p class="text-xs text-gray-500 mb-2">Optional: Add timeline and effort for capacity planning</p>
-					<div class="grid grid-cols-3 gap-3">
-						<div>
-							<label class="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
-							<input type="date" id="new-milestone-start-date"
-								class="w-full px-3 py-2 border border-gray-300 rounded-lg">
-						</div>
-						<div>
-							<label class="block text-sm font-medium text-gray-700 mb-1">End Date</label>
-							<input type="date" id="new-milestone-end-date"
-								class="w-full px-3 py-2 border border-gray-300 rounded-lg">
-						</div>
-						<div>
-							<label class="block text-sm font-medium text-gray-700 mb-1">Hours/Week</label>
-							<input type="number" id="new-milestone-hours" min="0" step="0.5"
-								class="w-full px-3 py-2 border border-gray-300 rounded-lg" placeholder="0">
-						</div>
-					</div>
-				</div>
+					<p class="text-xs text-gray-500 mt-3 border-t pt-2">
+					<span class="font-medium">Note:</span> Milestone date ranges are auto-calculated based on planned dates.
+					Assign engineers to milestones after creating them.
+				</p>
 			</div>
 			<button onclick="addMilestone()"
 				class="mt-3 w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
@@ -368,6 +362,61 @@
 			</button>
 		</div>
 	</div>
+	</div>
+
+	<!-- Milestone Assignment Modal -->
+	<div id="modal-milestone-assignment"
+		class="modal hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+		<div class="bg-white rounded-lg p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+			<div class="flex justify-between items-center mb-4">
+				<div>
+					<h3 class="text-xl font-bold">Assign Engineers to Milestone</h3>
+					<p class="text-sm text-gray-600" id="milestone-assignment-name"></p>
+					<p class="text-xs text-gray-500" id="milestone-assignment-dates"></p>
+				</div>
+				<button onclick="closeModal('milestone-assignment')" class="text-gray-500 hover:text-gray-700">
+					<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12">
+						</path>
+					</svg>
+				</button>
+			</div>
+			<input type="hidden" id="milestone-assignment-id">
+
+			<!-- Add Assignment Form -->
+			<div class="bg-green-50 rounded-lg p-4 mb-4">
+				<h4 class="font-medium text-gray-800 mb-3">Add Engineer</h4>
+				<div class="grid grid-cols-2 gap-3">
+					<div>
+						<label class="block text-sm font-medium text-gray-700 mb-1">Engineer</label>
+						<select id="new-milestone-assignment-engineer"
+							class="w-full px-3 py-2 border border-gray-300 rounded-lg"></select>
+					</div>
+					<div>
+						<label class="block text-sm font-medium text-gray-700 mb-1">Hours per Week</label>
+						<input type="number" id="new-milestone-assignment-hours" min="0" max="40"
+							class="w-full px-3 py-2 border border-gray-300 rounded-lg" placeholder="0">
+					</div>
+				</div>
+				<button onclick="addMilestoneAssignment()"
+					class="mt-3 w-full px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">
+					Add Assignment
+				</button>
+			</div>
+
+			<!-- Current Assignments List -->
+			<div>
+				<h4 class="font-medium text-gray-800 mb-3">Current Assignments</h4>
+				<div id="milestone-assignments-list" class="space-y-2"></div>
+			</div>
+
+			<div class="flex justify-end space-x-3 pt-4 mt-6 border-t">
+				<button onclick="closeModal('milestone-assignment')"
+					class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">
+					Done
+				</button>
+			</div>
+		</div>
 	</div>
 
 	<!-- Task Modal -->
