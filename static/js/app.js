@@ -42,7 +42,20 @@ let capacityTrendChartInstance = null;
 document.addEventListener('DOMContentLoaded', () => {
     loadData();
     checkJiraConfig();
+    checkAuthStatus();
+    checkMaintenanceMessage();
+    // Poll for maintenance messages every 30 seconds
+    setInterval(checkMaintenanceMessage, 30000);
     document.getElementById('new-expense-date').value = new Date().toISOString().split('T')[0];
+    
+    // Close hamburger menu when clicking outside
+    document.addEventListener('click', (e) => {
+        const menu = document.getElementById('user-menu');
+        const btn = document.getElementById('hamburger-btn');
+        if (menu && !menu.contains(e.target) && !btn.contains(e.target)) {
+            menu.classList.add('hidden');
+        }
+    });
 });
 
 async function loadData() {
@@ -3379,4 +3392,66 @@ function renderExpenseCategoryChart(categoryTotals) {
             }
         }
     });
+}
+
+// ============================================================================
+// Authentication & User Menu
+// ============================================================================
+
+async function checkAuthStatus() {
+    try {
+        const response = await fetch(`${API}/api/auth/status`);
+        const auth = await response.json();
+        
+        const statusEl = document.getElementById('user-menu-status');
+        const itemsEl = document.getElementById('user-menu-items');
+        
+        if (auth.authenticated) {
+            statusEl.innerHTML = `
+                <p class="text-sm font-medium text-gray-800">${auth.username}</p>
+                <p class="text-xs text-gray-500">${auth.isAdmin ? 'Administrator' : 'User'}</p>
+            `;
+            
+            let menuHtml = '';
+            if (auth.isAdmin) {
+                menuHtml += '<a href="/admin" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Admin Panel</a>';
+            }
+            menuHtml += '<a href="/logout" class="block px-4 py-2 text-sm text-red-600 hover:bg-gray-100">Logout</a>';
+            itemsEl.innerHTML = menuHtml;
+        } else {
+            statusEl.innerHTML = '<p class="text-sm text-gray-500">Not logged in</p>';
+            itemsEl.innerHTML = '<a href="/login" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Login</a>';
+        }
+    } catch (err) {
+        console.error('Failed to check auth status:', err);
+    }
+}
+
+function toggleUserMenu() {
+    const menu = document.getElementById('user-menu');
+    menu.classList.toggle('hidden');
+}
+
+
+// ============================================================================
+// Maintenance Message Polling
+// ============================================================================
+
+async function checkMaintenanceMessage() {
+    try {
+        const response = await fetch(`${API}/api/maintenance`);
+        const msg = await response.json();
+        
+        const banner = document.getElementById('maintenance-banner');
+        const text = document.getElementById('maintenance-message-text');
+        
+        if (msg && msg.active) {
+            text.textContent = msg.message;
+            banner.classList.remove('hidden');
+        } else {
+            banner.classList.add('hidden');
+        }
+    } catch (err) {
+        // Silently fail - maintenance check is non-critical
+    }
 }

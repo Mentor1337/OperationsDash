@@ -1,6 +1,6 @@
 
 
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, session, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from datetime import datetime, date
@@ -8,6 +8,8 @@ from dotenv import load_dotenv
 import requests
 import os
 import urllib3
+import logging
+from functools import wraps
 
 # Load environment variables from .env file
 load_dotenv()
@@ -39,6 +41,19 @@ IGNITION_API_BASE_URL = os.getenv(
 )
 IGNITION_API_USERNAME = os.getenv('IGNITION_API_USERNAME', '')
 IGNITION_API_PASSWORD = os.getenv('IGNITION_API_PASSWORD', '')
+
+# Admin users (usernames, lowercase, no domain)
+ADMIN_USERS = ['twilcox', 'csmoak', 'tthompson']
+
+# LDAP Authentication
+try:
+    from ldap_utils import authenticate as ldap_authenticate, sanitize_username, get_user_info
+except ImportError:
+    def ldap_authenticate(u, p): return u == 'admin' and p == 'admin'
+    def sanitize_username(u): return u.split('@')[0].lower().strip() if u else ''
+    def get_user_info(u): return {'displayName': u, 'mail': ''}
+
+logger = logging.getLogger(__name__)
 
 db = SQLAlchemy(app)
 
@@ -284,14 +299,319 @@ class ProjectJiraIssue(db.Model):
             'createdAt': self.created_at.isoformat() if self.created_at else None
         }
 
+class MaintenanceMessage(db.Model):
+    """System-wide maintenance alerts sent by admins"""
+    __tablename__ = 'maintenance_messages'
+    id = db.Column(db.Integer, primary_key=True)
+    message = db.Column(db.Text, nullable=False)
+    created_by = db.Column(db.String(100))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    active = db.Column(db.Boolean, default=True)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'message': self.message,
+            'createdBy': self.created_by,
+            'createdAt': self.created_at.isoformat() if self.created_at else None,
+            'active': self.active
+        }
+
 
 # ============================================================================
-# Routes - Main Page
+# Auth Helpers
+# ============================================================================
+
+def admin_required(f):
+    """Decorator that requires the user to be an authenticated admin."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        username = session.get('username')
+        if not username or username not in ADMIN_USERS:
+            return jsonify({'error': 'Admin access required'}), 403
+        return f(*args, **kwargs)
+    return decorated
+
+
+def get_current_user():
+    """Return the current session user or None."""
+    return session.get('username')
+
+
+def is_admin():
+    """Check if the current session user is an admin."""
+    return get_current_user() in ADMIN_USERS
+
+
+# ============================================================================
+# Routes - Main Page & Auth
 # ============================================================================
 
 @app.route('/')
 def index():
     return render_template('index.html')
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        raw_username = request.form.get('username', '')
+        password = request.form.get('password', '')
+        username = sanitize_username(raw_username)
+        
+        if not username or not password:
+            flash('Username and password required', 'danger')
+            return render_template('login.html')
+        
+        try:
+            if ldap_authenticate(username, password):
+                session['username'] = username
+                session['login_time'] = datetime.utcnow().isoformat()
+                session['is_admin'] = username in ADMIN_USERS
+                session.permanent = False
+                logger.info(f"User {username} logged in successfully")
+                
+                next_url = request.args.get('next', url_for('index'))
+                return redirect(next_url)
+            else:
+                flash('Invalid credentials', 'danger')
+                logger.warning(f"Failed login attempt for: {username}")
+        except Exception as e:
+            logger.error(f"Auth error for {username}: {e}")
+            flash('Authentication service unavailable', 'danger')
+    
+    return render_template('login.html')
+
+
+@app.route('/logout')
+def logout():
+    username = session.get('username')
+    session.clear()
+    if username:
+        logger.info(f"User {username} logged out")
+    return redirect(url_for('index'))
+
+
+@app.route('/admin')
+def admin_panel():
+    username = session.get('username')
+    if not username or username not in ADMIN_USERS:
+        flash('Admin access required', 'danger')
+        return redirect(url_for('login', next=url_for('admin_panel')))
+    return render_template('admin.html')
+
+
+@app.route('/api/auth/status')
+def auth_status():
+    """Return current auth state for the frontend."""
+    username = session.get('username')
+    return jsonify({
+        'authenticated': username is not None,
+        'username': username,
+        'isAdmin': username in ADMIN_USERS if username else False
+    })
+
+
+# ============================================================================
+# API Routes - Maintenance Messages
+# ============================================================================
+
+@app.route('/api/maintenance', methods=['GET'])
+def get_maintenance_message():
+    """Get the current active maintenance message (if any)."""
+    msg = MaintenanceMessage.query.filter_by(active=True).order_by(
+        MaintenanceMessage.created_at.desc()
+    ).first()
+    if msg:
+        return jsonify(msg.to_dict())
+    return jsonify(None)
+
+
+@app.route('/api/maintenance', methods=['POST'])
+@admin_required
+def send_maintenance_message():
+    """Send a new maintenance message (admin only)."""
+    data = request.get_json()
+    message_text = data.get('message', '').strip()
+    
+    if not message_text:
+        return jsonify({'error': 'Message is required'}), 400
+    
+    # Deactivate any existing active messages
+    MaintenanceMessage.query.filter_by(active=True).update({'active': False})
+    
+    msg = MaintenanceMessage(
+        message=message_text,
+        created_by=session.get('username'),
+        active=True
+    )
+    db.session.add(msg)
+    db.session.commit()
+    
+    logger.info(f"Maintenance message sent by {session.get('username')}: {message_text}")
+    return jsonify(msg.to_dict()), 201
+
+
+@app.route('/api/maintenance/<int:id>/dismiss', methods=['POST'])
+@admin_required
+def dismiss_maintenance_message(id):
+    """Dismiss/deactivate a maintenance message (admin only)."""
+    msg = MaintenanceMessage.query.get_or_404(id)
+    msg.active = False
+    db.session.commit()
+    
+    logger.info(f"Maintenance message {id} dismissed by {session.get('username')}")
+    return jsonify({'success': True})
+
+
+# ============================================================================
+# API Routes - Admin Data Explorer
+# ============================================================================
+
+# Map of allowed table names to their models (for safety)
+ADMIN_TABLE_MAP = {}
+
+def _build_table_map():
+    """Build the admin table map after models are defined."""
+    global ADMIN_TABLE_MAP
+    ADMIN_TABLE_MAP = {
+        'engineers': Engineer,
+        'engineer_non_project_time': EngineerNonProjectTime,
+        'projects': Project,
+        'project_yearly_budgets': ProjectYearlyBudget,
+        'expenses': Expense,
+        'milestones': Milestone,
+        'milestone_assignments': MilestoneAssignment,
+        'tasks': Task,
+        'change_history': ChangeHistory,
+        'project_jira_issues': ProjectJiraIssue,
+        'maintenance_messages': MaintenanceMessage
+    }
+
+
+@app.route('/api/admin/tables', methods=['GET'])
+@admin_required
+def admin_list_tables():
+    """List all database tables with row counts."""
+    if not ADMIN_TABLE_MAP:
+        _build_table_map()
+    
+    tables = []
+    for name, model in ADMIN_TABLE_MAP.items():
+        try:
+            count = model.query.count()
+        except Exception:
+            count = 0
+        tables.append({'name': name, 'rowCount': count})
+    
+    return jsonify(tables)
+
+
+@app.route('/api/admin/tables/<table_name>', methods=['GET'])
+@admin_required
+def admin_get_table_data(table_name):
+    """Get all rows from a table."""
+    if not ADMIN_TABLE_MAP:
+        _build_table_map()
+    
+    model = ADMIN_TABLE_MAP.get(table_name)
+    if not model:
+        return jsonify({'error': f'Table {table_name} not found'}), 404
+    
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 50, type=int)
+    
+    # Get column names
+    columns = [col.name for col in model.__table__.columns]
+    
+    # Paginate
+    query = model.query.order_by(model.__table__.c.id.desc())
+    total = query.count()
+    rows = query.offset((page - 1) * per_page).limit(per_page).all()
+    
+    # Build row data
+    data = []
+    for row in rows:
+        row_data = {}
+        for col in columns:
+            val = getattr(row, col, None)
+            if isinstance(val, (datetime, date)):
+                val = val.isoformat()
+            row_data[col] = val
+        data.append(row_data)
+    
+    return jsonify({
+        'columns': columns,
+        'rows': data,
+        'total': total,
+        'page': page,
+        'perPage': per_page,
+        'totalPages': (total + per_page - 1) // per_page
+    })
+
+
+@app.route('/api/admin/tables/<table_name>/<int:row_id>', methods=['PUT'])
+@admin_required
+def admin_update_row(table_name, row_id):
+    """Update a single row in a table."""
+    if not ADMIN_TABLE_MAP:
+        _build_table_map()
+    
+    model = ADMIN_TABLE_MAP.get(table_name)
+    if not model:
+        return jsonify({'error': f'Table {table_name} not found'}), 404
+    
+    row = model.query.get_or_404(row_id)
+    data = request.get_json()
+    columns = [col.name for col in model.__table__.columns]
+    
+    for key, value in data.items():
+        if key == 'id':  # Never update the ID
+            continue
+        if key in columns:
+            col_obj = model.__table__.c[key]
+            # Handle type conversions
+            if value == '' or value is None:
+                setattr(row, key, None)
+            elif str(col_obj.type) in ('DATE',):
+                setattr(row, key, datetime.strptime(value, '%Y-%m-%d').date() if value else None)
+            elif str(col_obj.type) in ('DATETIME',):
+                setattr(row, key, datetime.fromisoformat(value) if value else None)
+            else:
+                setattr(row, key, value)
+    
+    db.session.commit()
+    logger.info(f"Admin {session.get('username')} updated {table_name} row {row_id}")
+    
+    # Return updated row
+    row_data = {}
+    for col in columns:
+        val = getattr(row, col, None)
+        if isinstance(val, (datetime, date)):
+            val = val.isoformat()
+        row_data[col] = val
+    
+    return jsonify(row_data)
+
+
+@app.route('/api/admin/tables/<table_name>/<int:row_id>', methods=['DELETE'])
+@admin_required
+def admin_delete_row(table_name, row_id):
+    """Delete a single row from a table."""
+    if not ADMIN_TABLE_MAP:
+        _build_table_map()
+    
+    model = ADMIN_TABLE_MAP.get(table_name)
+    if not model:
+        return jsonify({'error': f'Table {table_name} not found'}), 404
+    
+    row = model.query.get_or_404(row_id)
+    db.session.delete(row)
+    db.session.commit()
+    
+    logger.info(f"Admin {session.get('username')} deleted {table_name} row {row_id}")
+    return '', 204
+
 
 
 # ============================================================================

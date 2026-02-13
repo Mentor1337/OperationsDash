@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Login - Operations Dashboard</title>
+	<script src="https://cdn.tailwindcss.com"></script>
+</head>
+
+<body class="bg-gray-100 min-h-screen flex items-center justify-center">
+	<div class="w-full max-w-md">
+		<div class="bg-white rounded-xl shadow-lg p-8">
+			<!-- Header -->
+			<div class="text-center mb-8">
+				<h1 class="text-2xl font-bold text-gray-800">Operations Dashboard</h1>
+				<p class="text-gray-500 mt-1">Sign in with your network credentials</p>
+			</div>
+
+			<!-- Flash Messages -->
+			{% with messages = get_flashed_messages(with_categories=true) %}
+			{% if messages %}
+			{% for category, message in messages %}
+			<div class="mb-4 p-3 rounded-lg text-sm font-medium
+				{% if category == 'danger' %}bg-red-100 text-red-700 border border-red-200
+				{% else %}bg-blue-100 text-blue-700 border border-blue-200{% endif %}">
+				{{ message }}
+			</div>
+			{% endfor %}
+			{% endif %}
+			{% endwith %}
+
+			<!-- Login Form -->
+			<form method="POST" class="space-y-5">
+				<div>
+					<label class="block text-sm font-medium text-gray-700 mb-1">Username</label>
+					<input type="text" name="username" required autofocus
+						class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
+						placeholder="Username">
+					<p class="text-xs text-gray-400 mt-1">You can enter with or without @proterra.com</p>
+				</div>
+				<div>
+					<label class="block text-sm font-medium text-gray-700 mb-1">Password</label>
+					<input type="password" name="password" required
+						class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
+						placeholder="Password">
+				</div>
+				<button type="submit"
+					class="w-full py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 focus:ring-4 focus:ring-blue-200 transition">
+					Sign In
+				</button>
+			</form>
+
+			<div class="mt-6 text-center">
+				<a href="/" class="text-sm text-gray-500 hover:text-gray-700">
+					&larr; Back to Dashboard
+				</a>
+			</div>
+		</div>
+	</div>
+</body>
+
+</html>

@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Admin Panel - Operations Dashboard</title>
+	<script src="https://cdn.tailwindcss.com"></script>
+	<link rel="stylesheet" href="/static/css/style.css">
+</head>
+
+<body class="bg-gray-100 min-h-screen">
+	<div class="p-6 max-w-7xl mx-auto">
+		<!-- Header -->
+		<div class="flex items-center justify-between mb-6">
+			<div>
+				<h1 class="text-3xl font-bold text-gray-800">Admin Panel</h1>
+				<p class="text-gray-600">System administration and data management</p>
+			</div>
+			<div class="flex items-center space-x-3">
+				<span class="text-sm text-gray-600">Logged in as
+					<span class="font-semibold text-gray-800" id="admin-username">...</span>
+				</span>
+				<a href="/" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 text-sm">&larr;
+					Dashboard</a>
+				<a href="/logout"
+					class="px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 text-sm">Logout</a>
+			</div>
+		</div>
+
+		<!-- Tabs -->
+		<div class="flex space-x-4 border-b border-gray-200 mb-6">
+			<button onclick="setAdminTab('maintenance')" id="atab-maintenance"
+				class="admin-tab-btn px-4 py-2 font-medium text-blue-600 border-b-2 border-blue-600">
+				Maintenance Alerts
+			</button>
+			<button onclick="setAdminTab('explorer')" id="atab-explorer"
+				class="admin-tab-btn px-4 py-2 font-medium text-gray-600 hover:text-gray-800">
+				Data Explorer
+			</button>
+			<button onclick="setAdminTab('users')" id="atab-users"
+				class="admin-tab-btn px-4 py-2 font-medium text-gray-600 hover:text-gray-800">
+				Users & Permissions
+			</button>
+		</div>
+
+		<!-- Maintenance Tab -->
+		<div id="admin-tab-maintenance" class="admin-tab-content">
+			<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+				<!-- Send Alert -->
+				<div class="bg-white rounded-xl shadow-sm p-6">
+					<h2 class="text-lg font-semibold text-gray-800 mb-4">Send Maintenance Alert</h2>
+					<p class="text-sm text-gray-600 mb-4">This message will be displayed as a banner to all
+						users currently viewing the dashboard.</p>
+
+					<textarea id="maintenance-message" rows="3"
+						class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 mb-3"
+						placeholder="Save anything you are working on as the site will be shutting down for an update."></textarea>
+
+					<button onclick="sendMaintenanceAlert()"
+						class="w-full py-3 bg-orange-600 text-white font-medium rounded-lg hover:bg-orange-700 transition flex items-center justify-center space-x-2">
+						<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+								d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z">
+							</path>
+						</svg>
+						<span>Send Alert</span>
+					</button>
+				</div>
+
+				<!-- Current Status -->
+				<div class="bg-white rounded-xl shadow-sm p-6">
+					<h2 class="text-lg font-semibold text-gray-800 mb-4">Current Alert Status</h2>
+
+					<div id="current-maintenance" class="space-y-4">
+						<div class="text-gray-500 text-sm">Checking...</div>
+					</div>
+				</div>
+			</div>
+
+			<!-- Preview -->
+			<div class="mt-6 bg-white rounded-xl shadow-sm p-6">
+				<h2 class="text-lg font-semibold text-gray-800 mb-4">Preview</h2>
+				<p class="text-sm text-gray-600 mb-3">This is how the alert will appear to users:</p>
+				<div id="maintenance-preview"
+					class="bg-orange-500 text-white px-4 py-3 rounded-lg text-center font-medium hidden">
+					<span id="preview-text"></span>
+				</div>
+				<div id="maintenance-preview-empty" class="text-gray-400 text-sm italic">
+					Type a message above to see the preview
+				</div>
+			</div>
+		</div>
+
+		<!-- Data Explorer Tab -->
+		<div id="admin-tab-explorer" class="admin-tab-content hidden">
+			<div class="bg-white rounded-xl shadow-sm p-6">
+				<!-- Table Selector -->
+				<div class="flex items-center space-x-4 mb-6">
+					<div class="flex-1">
+						<label class="block text-sm font-medium text-gray-700 mb-1">Select Table</label>
+						<select id="explorer-table-select" onchange="loadTableData()"
+							class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+							<option value="">-- Choose a table --</option>
+						</select>
+					</div>
+					<div class="text-sm text-gray-600 mt-6">
+						<span id="explorer-row-count" class="font-semibold">0</span> rows
+					</div>
+				</div>
+
+				<!-- Table Data -->
+				<div id="explorer-table-container" class="overflow-x-auto">
+					<div class="text-gray-500 text-sm text-center py-8">Select a table to view its data</div>
+				</div>
+
+				<!-- Pagination -->
+				<div id="explorer-pagination" class="hidden flex items-center justify-between mt-4 pt-4 border-t">
+					<div class="text-sm text-gray-600">
+						Page <span id="explorer-current-page">1</span> of <span id="explorer-total-pages">1</span>
+					</div>
+					<div class="flex space-x-2">
+						<button onclick="explorerPrevPage()"
+							class="px-3 py-1 bg-gray-200 rounded hover:bg-gray-300 text-sm">&larr; Prev</button>
+						<button onclick="explorerNextPage()"
+							class="px-3 py-1 bg-gray-200 rounded hover:bg-gray-300 text-sm">Next &rarr;</button>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<!-- Users & Permissions Tab -->
+		<div id="admin-tab-users" class="admin-tab-content hidden">
+			<div class="bg-white rounded-xl shadow-sm p-6">
+				<h2 class="text-lg font-semibold text-gray-800 mb-4">Admin Users</h2>
+				<p class="text-sm text-gray-600 mb-4">Users with administrative access to this panel. To modify
+					this list, update the <code class="bg-gray-100 px-1 rounded text-sm">ADMIN_USERS</code> variable in
+					<code class="bg-gray-100 px-1 rounded text-sm">app.py</code>.
+				</p>
+
+				<div class="space-y-2" id="admin-users-list">
+					<!-- Populated by JS -->
+				</div>
+
+				<div class="mt-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
+					<h3 class="text-sm font-semibold text-blue-800 mb-2">Future Features</h3>
+					<ul class="text-sm text-blue-700 space-y-1">
+						<li>- Role-based editing permissions (e.g., some users can edit projects but not delete)</li>
+						<li>- LDAP group-based access control</li>
+						<li>- Audit log of all admin actions</li>
+					</ul>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<!-- Edit Row Modal -->
+	<div id="modal-edit-row"
+		class="modal hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+		<div class="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+			<div class="flex justify-between items-center mb-4">
+				<h3 class="text-xl font-bold" id="edit-row-title">Edit Row</h3>
+				<button onclick="closeEditModal()" class="text-gray-500 hover:text-gray-700">
+					<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12">
+						</path>
+					</svg>
+				</button>
+			</div>
+			<div id="edit-row-fields" class="space-y-3">
+				<!-- Dynamically populated -->
+			</div>
+			<div class="flex justify-end space-x-3 pt-4 mt-4 border-t">
+				<button onclick="closeEditModal()"
+					class="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
+				<button onclick="saveEditRow()"
+					class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Save Changes</button>
+			</div>
+		</div>
+	</div>
+
+	<script>
+		const API = '';
+		let currentAdminTab = 'maintenance';
+		let explorerPage = 1;
+		let explorerTotalPages = 1;
+		let editingTable = '';
+		let editingRowId = null;
+
+		// ========================================
+		// Init
+		// ========================================
+		document.addEventListener('DOMContentLoaded', async () => {
+			// Load auth status
+			try {
+				const res = await fetch(`${API}/api/auth/status`);
+				const auth = await res.json();
+				document.getElementById('admin-username').textContent = auth.username || 'unknown';
+
+				// Populate admin users list
+				const list = document.getElementById('admin-users-list');
+				const admins = ['twilcox', 'csmoak', 'tthompson'];
+				list.innerHTML = admins.map(u => `
+					<div class="flex items-center space-x-3 p-3 rounded-lg ${u === auth.username ? 'bg-blue-50 border border-blue-200' : 'bg-gray-50'}">
+						<div class="w-8 h-8 bg-gray-300 rounded-full flex items-center justify-center text-sm font-bold text-white uppercase">
+							${u[0]}
+						</div>
+						<div>
+							<span class="font-medium text-gray-800">${u}</span>
+							${u === auth.username ? '<span class="ml-2 text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">You</span>' : ''}
+						</div>
+					</div>
+				`).join('');
+			} catch (e) { console.error(e); }
+
+			// Load maintenance status
+			loadMaintenanceStatus();
+
+			// Load table list
+			loadTableList();
+
+			// Preview live update
+			document.getElementById('maintenance-message').addEventListener('input', (e) => {
+				const text = e.target.value.trim();
+				const preview = document.getElementById('maintenance-preview');
+				const previewText = document.getElementById('preview-text');
+				const empty = document.getElementById('maintenance-preview-empty');
+				if (text) {
+					previewText.textContent = text;
+					preview.classList.remove('hidden');
+					empty.classList.add('hidden');
+				} else {
+					preview.classList.add('hidden');
+					empty.classList.remove('hidden');
+				}
+			});
+		});
+
+		// ========================================
+		// Tab management
+		// ========================================
+		function setAdminTab(tab) {
+			currentAdminTab = tab;
+			document.querySelectorAll('.admin-tab-content').forEach(el => el.classList.add('hidden'));
+			document.querySelectorAll('.admin-tab-btn').forEach(btn => {
+				btn.className = 'admin-tab-btn px-4 py-2 font-medium text-gray-600 hover:text-gray-800';
+			});
+			document.getElementById(`admin-tab-${tab}`).classList.remove('hidden');
+			document.getElementById(`atab-${tab}`).className = 'admin-tab-btn px-4 py-2 font-medium text-blue-600 border-b-2 border-blue-600';
+		}
+
+		// ========================================
+		// Maintenance
+		// ========================================
+		async function loadMaintenanceStatus() {
+			const container = document.getElementById('current-maintenance');
+			try {
+				const res = await fetch(`${API}/api/maintenance`);
+				const msg = await res.json();
+
+				if (msg && msg.active) {
+					container.innerHTML = `
+						<div class="p-4 bg-orange-50 border border-orange-200 rounded-lg">
+							<div class="flex items-start justify-between">
+								<div>
+									<p class="font-medium text-orange-800">${msg.message}</p>
+									<p class="text-sm text-orange-600 mt-1">Sent by ${msg.createdBy || 'unknown'} at ${new Date(msg.createdAt).toLocaleString()}</p>
+								</div>
+								<button onclick="dismissMaintenance(${msg.id})"
+									class="px-3 py-1 bg-orange-200 text-orange-800 rounded hover:bg-orange-300 text-sm whitespace-nowrap ml-4">
+									Dismiss
+								</button>
+							</div>
+						</div>
+					`;
+				} else {
+					container.innerHTML = `
+						<div class="p-4 bg-green-50 border border-green-200 rounded-lg">
+							<p class="text-green-700 font-medium">No active maintenance alerts</p>
+							<p class="text-sm text-green-600 mt-1">All clear - no messages being displayed to users.</p>
+						</div>
+					`;
+				}
+			} catch (e) {
+				container.innerHTML = '<div class="text-red-500 text-sm">Failed to load maintenance status</div>';
+			}
+		}
+
+		async function sendMaintenanceAlert() {
+			const input = document.getElementById('maintenance-message');
+			const message = input.value.trim();
+			if (!message) {
+				alert('Please enter a message');
+				return;
+			}
+
+			if (!confirm('Send this maintenance alert to all users?\n\n"' + message + '"')) return;
+
+			try {
+				const res = await fetch(`${API}/api/maintenance`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ message })
+				});
+
+				if (!res.ok) {
+					const err = await res.json();
+					alert(err.error || 'Failed to send alert');
+					return;
+				}
+
+				input.value = '';
+				document.getElementById('maintenance-preview').classList.add('hidden');
+				document.getElementById('maintenance-preview-empty').classList.remove('hidden');
+				loadMaintenanceStatus();
+				alert('Maintenance alert sent successfully!');
+			} catch (e) {
+				alert('Failed to send alert: ' + e.message);
+			}
+		}
+
+		async function dismissMaintenance(id) {
+			if (!confirm('Dismiss this maintenance alert? It will no longer be shown to users.')) return;
+
+			try {
+				await fetch(`${API}/api/maintenance/${id}/dismiss`, { method: 'POST' });
+				loadMaintenanceStatus();
+			} catch (e) {
+				alert('Failed to dismiss: ' + e.message);
+			}
+		}
+
+		// ========================================
+		// Data Explorer
+		// ========================================
+		async function loadTableList() {
+			try {
+				const res = await fetch(`${API}/api/admin/tables`);
+				const tables = await res.json();
+				const select = document.getElementById('explorer-table-select');
+
+				tables.forEach(t => {
+					const opt = document.createElement('option');
+					opt.value = t.name;
+					opt.textContent = `${t.name} (${t.rowCount} rows)`;
+					select.appendChild(opt);
+				});
+			} catch (e) {
+				console.error('Failed to load tables:', e);
+			}
+		}
+
+		async function loadTableData(page = 1) {
+			const tableName = document.getElementById('explorer-table-select').value;
+			const container = document.getElementById('explorer-table-container');
+
+			if (!tableName) {
+				container.innerHTML = '<div class="text-gray-500 text-sm text-center py-8">Select a table to view its data</div>';
+				document.getElementById('explorer-pagination').classList.add('hidden');
+				return;
+			}
+
+			container.innerHTML = '<div class="text-center py-8"><div class="spinner mx-auto"></div><p class="text-gray-500 mt-2">Loading...</p></div>';
+
+			try {
+				const res = await fetch(`${API}/api/admin/tables/${tableName}?page=${page}&per_page=25`);
+				const data = await res.json();
+
+				explorerPage = data.page;
+				explorerTotalPages = data.totalPages;
+				document.getElementById('explorer-row-count').textContent = data.total;
+				document.getElementById('explorer-current-page').textContent = data.page;
+				document.getElementById('explorer-total-pages').textContent = data.totalPages;
+				document.getElementById('explorer-pagination').classList.toggle('hidden', data.totalPages <= 1);
+
+				if (data.rows.length === 0) {
+					container.innerHTML = '<div class="text-gray-500 text-sm text-center py-8">No data in this table</div>';
+					return;
+				}
+
+				// Build table
+				let html = '<table class="w-full text-sm border-collapse">';
+				html += '<thead><tr class="bg-gray-50">';
+				data.columns.forEach(col => {
+					html += `<th class="px-3 py-2 text-left font-semibold text-gray-700 border-b">${col}</th>`;
+				});
+				html += '<th class="px-3 py-2 text-right font-semibold text-gray-700 border-b">Actions</th>';
+				html += '</tr></thead><tbody>';
+
+				data.rows.forEach(row => {
+					html += '<tr class="hover:bg-gray-50 border-b border-gray-100">';
+					data.columns.forEach(col => {
+						let val = row[col];
+						if (val === null || val === undefined) val = '<span class="text-gray-400 italic">null</span>';
+						else if (typeof val === 'string' && val.length > 60) val = val.substring(0, 60) + '...';
+						html += `<td class="px-3 py-2 text-gray-700">${val}</td>`;
+					});
+					html += `<td class="px-3 py-2 text-right space-x-1">
+						<button onclick="editRow('${tableName}', ${row.id}, ${JSON.stringify(row).replace(/"/g, '&quot;')})"
+							class="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs hover:bg-blue-200">Edit</button>
+						<button onclick="deleteRow('${tableName}', ${row.id})"
+							class="px-2 py-1 bg-red-100 text-red-700 rounded text-xs hover:bg-red-200">Delete</button>
+					</td>`;
+					html += '</tr>';
+				});
+
+				html += '</tbody></table>';
+				container.innerHTML = html;
+			} catch (e) {
+				container.innerHTML = `<div class="text-red-500 text-sm text-center py-8">Failed to load data: ${e.message}</div>`;
+			}
+		}
+
+		function explorerPrevPage() {
+			if (explorerPage > 1) loadTableData(explorerPage - 1);
+		}
+
+		function explorerNextPage() {
+			if (explorerPage < explorerTotalPages) loadTableData(explorerPage + 1);
+		}
+
+		function editRow(tableName, rowId, rowData) {
+			editingTable = tableName;
+			editingRowId = rowId;
+
+			document.getElementById('edit-row-title').textContent = `Edit ${tableName} #${rowId}`;
+			const fields = document.getElementById('edit-row-fields');
+
+			fields.innerHTML = Object.entries(rowData).map(([key, value]) => {
+				const isId = key === 'id';
+				return `
+					<div>
+						<label class="block text-sm font-medium text-gray-700 mb-1">${key}</label>
+						<input type="text" name="${key}" value="${value !== null && value !== undefined ? value : ''}"
+							class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm ${isId ? 'bg-gray-100 text-gray-500' : ''}"
+							${isId ? 'readonly' : ''}>
+					</div>
+				`;
+			}).join('');
+
+			document.getElementById('modal-edit-row').classList.remove('hidden');
+		}
+
+		function closeEditModal() {
+			document.getElementById('modal-edit-row').classList.add('hidden');
+		}
+
+		async function saveEditRow() {
+			const fields = document.getElementById('edit-row-fields');
+			const inputs = fields.querySelectorAll('input');
+			const data = {};
+
+			inputs.forEach(input => {
+				if (input.name !== 'id') {
+					data[input.name] = input.value || null;
+				}
+			});
+
+			try {
+				const res = await fetch(`${API}/api/admin/tables/${editingTable}/${editingRowId}`, {
+					method: 'PUT',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify(data)
+				});
+
+				if (!res.ok) {
+					const err = await res.json();
+					alert(err.error || 'Failed to save');
+					return;
+				}
+
+				closeEditModal();
+				loadTableData(explorerPage);
+			} catch (e) {
+				alert('Failed to save: ' + e.message);
+			}
+		}
+
+		async function deleteRow(tableName, rowId) {
+			if (!confirm(`Delete row #${rowId} from ${tableName}? This cannot be undone.`)) return;
+
+			try {
+				await fetch(`${API}/api/admin/tables/${tableName}/${rowId}`, { method: 'DELETE' });
+				loadTableData(explorerPage);
+			} catch (e) {
+				alert('Failed to delete: ' + e.message);
+			}
+		}
+	</script>
+</body>
+
+</html>
