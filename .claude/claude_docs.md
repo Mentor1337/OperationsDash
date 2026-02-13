@@ -453,3 +453,24 @@ Before considering setup complete, verify:
 - [ ] Can see the dashboard interface
 
 If all boxes are checked, you're ready to develop! 🎉
+
+---
+
+## Versioning
+
+This project uses **semantic versioning** with a `-THWI` suffix:
+
+**Format**: `MAJOR.MINOR.PATCH[p]-THWI`
+
+- `MAJOR` — Breaking changes or major redesign
+- `MINOR` — New features (e.g., admin panel, auth system)
+- `PATCH` — Bug fixes, small tweaks
+- `p` suffix — Pre-release / preview builds
+- `-THWI` — Personal build tag (Tom Wilcox)
+
+**Current version**: `1.1.3p-THWI`
+
+> [!IMPORTANT]
+> **The version number MUST be updated with every push to Git.** The version is displayed in the hamburger menu dropdown in `templates/index.html`. When making changes, bump the appropriate version segment (patch for fixes, minor for features, major for breaking changes) before committing.
+
+**Location**: `templates/index.html` — search for `v1.` inside the `user-menu` div.
