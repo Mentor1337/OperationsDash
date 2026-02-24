@@ -150,7 +150,7 @@ function renderProjects() {
                 <svg class="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"></path></svg>
                 <span class="font-medium text-gray-700">Filters:</span>
                 ${hasActiveFilters ? `<button onclick="clearFilters()" class="text-sm text-blue-600 hover:text-blue-700">Clear Filters</button>` : ''}
-                <span class="text-sm text-gray-600">Showing ${filtered.length} of ${projects.length} projects</span>
+                <span class="text-sm text-gray-600" id="projects-filter-count">Showing ${filtered.length} of ${projects.length} projects</span>
             </div>
             <div class="grid grid-cols-5 gap-4">
                 <div class="flex-1 relative">
@@ -3751,13 +3751,17 @@ function renderIssues() {
         <div class="space-y-4" id="issues-list"></div>
     `;
 
+    updateIssueList();
+}
+
+function updateIssueList() {
     const list = document.getElementById('issues-list');
+    if (!list) return;
+    const filtered = getFilteredIssues();
     if (filtered.length === 0) {
         list.innerHTML = '<p class="text-gray-500 text-center py-8">No issues match your filters</p>';
     } else {
-        filtered.forEach(issue => {
-            list.innerHTML += createIssueCard(issue);
-        });
+        list.innerHTML = filtered.map(issue => createIssueCard(issue)).join('');
     }
 }
 
@@ -3767,7 +3771,6 @@ function getFilteredIssues() {
             i.title.toLowerCase().includes(issueSearchQuery.toLowerCase()) ||
             (i.description && i.description.toLowerCase().includes(issueSearchQuery.toLowerCase()));
 
-        // Handle include/exclude filters (prefix "not:" means exclude)
         const matchesStatus = issueStatusFilter === 'all' ? true :
             issueStatusFilter.startsWith('not:') ? i.status !== issueStatusFilter.slice(4) :
             i.status === issueStatusFilter;
@@ -3787,27 +3790,27 @@ function getFilteredIssues() {
 
 function handleIssueSearch(value) {
     issueSearchQuery = value;
-    renderIssues();
+    updateIssueList();
 }
 
 function handleIssueStatusFilter(value) {
     issueStatusFilter = value;
-    renderIssues();
+    updateIssueList();
 }
 
 function handleIssueSeverityFilter(value) {
     issueSeverityFilter = value;
-    renderIssues();
+    updateIssueList();
 }
 
 function handleIssueLocationFilter(value) {
     issueLocationFilter = value;
-    renderIssues();
+    updateIssueList();
 }
 
 function handleIssueCategoryFilter(value) {
     issueCategoryFilter = value;
-    renderIssues();
+    updateIssueList();
 }
 
 function clearIssueFilters() {
