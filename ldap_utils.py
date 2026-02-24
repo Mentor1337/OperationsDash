@@ -140,3 +140,77 @@ def get_user_info(username):
             continue
     
     return {'displayName': username, 'mail': f'{username}@proterra.com'}
+
+
+def lookup_username_by_name(first_name, last_name):
+    """
+    Search AD by first and last name to find the sAMAccountName (username).
+    Returns the username string if found, None otherwise.
+    
+    Also tries a combined display name search as fallback.
+    """
+    if not LDAP_AVAILABLE or not LDAP_BIND_USER or not LDAP_BIND_PASSWORD:
+        logger.warning("LDAP not available for name lookup")
+        return None
+    
+    if not first_name or not last_name:
+        return None
+    
+    servers = [LDAP_SERVER, LDAP_SECONDARY_SERVER]
+    
+    for server_url in servers:
+        if not server_url:
+            continue
+        try:
+            server = Server(server_url, get_info=ALL, connect_timeout=5)
+            conn = Connection(
+                server,
+                user=f'{LDAP_BIND_USER}@{LDAP_DOMAIN}',
+                password=LDAP_BIND_PASSWORD,
+                auto_bind=True,
+                read_only=True,
+                receive_timeout=10
+            )
+            
+            # Try givenName + sn search first
+            search_filter = f'(&(givenName={first_name})(sn={last_name}))'
+            conn.search(
+                LDAP_BASE_DN,
+                search_filter,
+                search_scope=SUBTREE,
+                attributes=['sAMAccountName', 'displayName']
+            )
+            
+            if conn.entries:
+                entry = conn.entries[0]
+                username = str(entry.sAMAccountName) if hasattr(entry, 'sAMAccountName') else None
+                conn.unbind()
+                if username:
+                    logger.info(f"LDAP lookup: {first_name} {last_name} -> {username}")
+                    return username.lower()
+            
+            # Fallback: try displayName search
+            display_name = f'{first_name} {last_name}'
+            conn.search(
+                LDAP_BASE_DN,
+                f'(displayName={display_name})',
+                search_scope=SUBTREE,
+                attributes=['sAMAccountName']
+            )
+            
+            if conn.entries:
+                entry = conn.entries[0]
+                username = str(entry.sAMAccountName) if hasattr(entry, 'sAMAccountName') else None
+                conn.unbind()
+                if username:
+                    logger.info(f"LDAP lookup (displayName): {display_name} -> {username}")
+                    return username.lower()
+            
+            conn.unbind()
+            
+        except Exception as e:
+            logger.warning(f"LDAP name lookup failed on {server_url}: {e}")
+            continue
+    
+    logger.info(f"LDAP lookup: no result for {first_name} {last_name}")
+    return None

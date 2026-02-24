@@ -2,6 +2,15 @@
 // API Base URL
 const API = '';
 
+// Auth state
+let authState = {
+    authenticated: false,
+    username: null,
+    isAdmin: false,
+    engineerId: null,
+    engineerName: null
+};
+
 // State
 let projects = [];
 let engineers = [];
@@ -129,10 +138,10 @@ function renderProjects() {
     container.innerHTML = `
         <div class="flex justify-between items-center mb-4">
             <h2 class="text-2xl font-bold text-gray-800">Active Projects</h2>
-            <button onclick="openProjectModal()" class="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+            ${canCreateProject() ? `<button onclick="openProjectModal()" class="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
                 <span>Add Project</span>
-            </button>
+            </button>` : ''}
         </div>
 
         <!-- Filters -->
@@ -352,9 +361,9 @@ function createProjectCard(p) {
                             </div>
                         </div>
                     </div>
-                    <button onclick="event.stopPropagation(); openProjectModal(${p.id})" class="ml-4 p-2 text-gray-600 hover:bg-gray-100 rounded">
+                    ${canEditProject(p) ? `<button onclick="event.stopPropagation(); openProjectModal(${p.id})" class="ml-4 p-2 text-gray-600 hover:bg-gray-100 rounded">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path></svg>
-                    </button>
+                    </button>` : ''}
                 </div>
             </div>
             ${isExpanded ? `
@@ -377,7 +386,7 @@ function createProjectCard(p) {
                             <div class="w-full bg-gray-200 rounded-full h-2 mt-2">
                                 <div class="${p.spent > p.budget * 1.1 ? 'bg-red-600' : p.spent > p.budget ? 'bg-yellow-500' : 'bg-green-600'} h-2 rounded-full transition-all duration-300" style="width: ${Math.min(budgetPct, 100)}%"></div>
                             </div>
-                            <button onclick="event.stopPropagation(); openExpenseModal(${p.id})" class="mt-2 w-full px-3 py-1 text-sm bg-blue-50 text-blue-700 rounded hover:bg-blue-100">Manage Expenses</button>
+                            ${canEditProject(p) ? `<button onclick="event.stopPropagation(); openExpenseModal(${p.id})" class="mt-2 w-full px-3 py-1 text-sm bg-blue-50 text-blue-700 rounded hover:bg-blue-100">Manage Expenses</button>` : ''}
                         </div>
                     </div>
                     ${p.notes ? `
@@ -389,7 +398,7 @@ function createProjectCard(p) {
                     <div>
                         <div class="flex justify-between items-center mb-2">
                             <h4 class="font-medium text-gray-700">Team Assignments:</h4>
-                            <button onclick="event.stopPropagation(); openTaskModal(${p.id})" class="text-sm text-blue-600 hover:text-blue-700">Manage Assignments</button>
+                            ${canEditProject(p) ? `<button onclick="event.stopPropagation(); openTaskModal(${p.id})" class="text-sm text-blue-600 hover:text-blue-700">Manage Assignments</button>` : ''}
                         </div>
                         ${p.tasks.length > 0 ? `
                         <div class="space-y-1">
@@ -404,7 +413,7 @@ function createProjectCard(p) {
                     <div>
                         <div class="flex justify-between items-center mb-2">
                             <h4 class="font-medium text-gray-700">Milestones:</h4>
-                            <button onclick="event.stopPropagation(); openMilestoneModal(${p.id})" class="text-sm text-blue-600 hover:text-blue-700">Manage Milestones</button>
+                            ${canEditProject(p) ? `<button onclick="event.stopPropagation(); openMilestoneModal(${p.id})" class="text-sm text-blue-600 hover:text-blue-700">Manage Milestones</button>` : ''}
                         </div>
                         ${p.milestones.length > 0 ? `
                         <div class="space-y-1">
@@ -490,6 +499,18 @@ function openProjectModal(id = null) {
     }
 
     updateYearlyBudgetUI();
+    
+    // Disable owner selector for non-admins
+    const ownerSelect = document.getElementById('project-owner');
+    if (ownerSelect) {
+        ownerSelect.disabled = !authState.isAdmin;
+        if (!authState.isAdmin) {
+            ownerSelect.title = 'Only administrators can change project ownership';
+        } else {
+            ownerSelect.title = '';
+        }
+    }
+    
     modal.classList.remove('hidden');
 }
 
@@ -582,11 +603,14 @@ async function saveProject(e) {
     };
     
     try {
+        let response;
         if (id) {
-            await fetch(`${API}/api/projects/${id}`, { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
+            response = await fetch(`${API}/api/projects/${id}`, { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
         } else {
-            await fetch(`${API}/api/projects`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
+            response = await fetch(`${API}/api/projects`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
         }
+        if (await handleApiError(response)) return;
+        if (!response.ok) throw new Error('Failed to save');
         closeModal('project');
         await loadData();
         showToast('Project saved successfully', 'success');
@@ -597,15 +621,17 @@ async function saveProject(e) {
 
 async function deleteProject() {
     const id = document.getElementById('project-id').value;
-    if (!confirm('Delete this project? This cannot be undone.')) return;
+    if (!confirm('Cancel this project? This will un-allocate all resources and mark it as Cancelled.')) return;
     
     try {
-        await fetch(`${API}/api/projects/${id}`, { method: 'DELETE' });
+        const response = await fetch(`${API}/api/projects/${id}`, { method: 'DELETE' });
+        if (await handleApiError(response)) return;
+        if (!response.ok) throw new Error('Failed to cancel');
         closeModal('project');
         await loadData();
-        showToast('Project deleted', 'success');
+        showToast('Project cancelled successfully', 'success');
     } catch (err) {
-        showToast('Failed to delete project', 'error');
+        showToast('Failed to cancel project', 'error');
     }
 }
 
@@ -3527,13 +3553,22 @@ async function checkAuthStatus() {
         const response = await fetch(`${API}/api/auth/status`);
         const auth = await response.json();
         
+        // Update global auth state
+        authState = {
+            authenticated: auth.authenticated,
+            username: auth.username,
+            isAdmin: auth.isAdmin,
+            engineerId: auth.engineerId,
+            engineerName: auth.engineerName
+        };
+        
         const statusEl = document.getElementById('user-menu-status');
         const itemsEl = document.getElementById('user-menu-items');
         
         if (auth.authenticated) {
             statusEl.innerHTML = `
                 <p class="text-sm font-medium text-gray-800">${auth.username}</p>
-                <p class="text-xs text-gray-500">${auth.isAdmin ? 'Administrator' : 'User'}</p>
+                <p class="text-xs text-gray-500">${auth.isAdmin ? 'Administrator' : 'Engineer'}</p>
             `;
             
             let menuHtml = '';
@@ -3554,6 +3589,47 @@ async function checkAuthStatus() {
 function toggleUserMenu() {
     const menu = document.getElementById('user-menu');
     menu.classList.toggle('hidden');
+}
+
+
+// ============================================================================
+// Permission Helpers
+// ============================================================================
+
+function canEditProject(project) {
+    if (!authState.authenticated) return false;
+    if (authState.isAdmin) return true;
+    if (!authState.engineerId) return false;
+    return project.ownerId === authState.engineerId;
+}
+
+function canCreateProject() {
+    return authState.authenticated && (authState.isAdmin || authState.engineerId);
+}
+
+function canEditPlantIssue(issue) {
+    if (!authState.authenticated) return false;
+    if (authState.isAdmin) return true;
+    return issue.createdBy === authState.username;
+}
+
+// Show permission error toast
+function showPermissionError(message) {
+    showToast(message || 'You do not have permission to perform this action', 'error');
+}
+
+// Handle API response errors with permission-aware messages
+async function handleApiError(response) {
+    if (response.status === 401) {
+        showToast('Please log in to make changes', 'error');
+        return true;
+    }
+    if (response.status === 403) {
+        const data = await response.json().catch(() => ({}));
+        showPermissionError(data.error);
+        return true;
+    }
+    return false;
 }
 
 
@@ -3602,10 +3678,10 @@ function renderIssues() {
     container.innerHTML = `
         <div class="flex justify-between items-center mb-4">
             <h2 class="text-2xl font-bold text-gray-800">Plant Issues</h2>
-            <button onclick="openIssueModal()" class="flex items-center space-x-2 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700">
+            ${authState.authenticated ? `<button onclick="openIssueModal()" class="flex items-center space-x-2 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
                 <span>Report Issue</span>
-            </button>
+            </button>` : ''}
         </div>
 
         <!-- Summary Cards -->
@@ -3849,7 +3925,7 @@ function createIssueCard(issue) {
                     <div class="mb-4">
                         <div class="flex justify-between items-center mb-2">
                             <p class="text-sm font-medium text-gray-700">Assigned Engineers (${(issue.assignments || []).length})</p>
-                            <button onclick="openIssueAssignmentModal(${issue.id})" class="text-sm text-orange-600 hover:text-orange-700">Manage</button>
+                            ${canEditPlantIssue(issue) ? `<button onclick="openIssueAssignmentModal(${issue.id})" class="text-sm text-orange-600 hover:text-orange-700">Manage</button>` : ''}
                         </div>
                         <div class="flex flex-wrap gap-2">
                             ${(issue.assignments || []).length === 0 ? '<span class="text-sm text-gray-500">No engineers assigned</span>' :
@@ -3861,8 +3937,10 @@ function createIssueCard(issue) {
 
                     <!-- Actions -->
                     <div class="flex space-x-2">
+                        ${canEditPlantIssue(issue) ? `
                         <button onclick="openIssueModal(${issue.id})" class="px-3 py-1 bg-orange-600 text-white rounded hover:bg-orange-700 text-sm">Edit Issue</button>
                         <button onclick="openIssueAssignmentModal(${issue.id})" class="px-3 py-1 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm">Manage Team</button>
+                        ` : ''}
                     </div>
                 </div>
             ` : ''}
@@ -3941,6 +4019,7 @@ async function saveIssue(e) {
             body: JSON.stringify(data)
         });
 
+        if (await handleApiError(response)) return;
         if (!response.ok) throw new Error('Failed to save issue');
 
         await loadData();
@@ -3961,6 +4040,7 @@ async function deleteIssue() {
             method: 'DELETE'
         });
 
+        if (await handleApiError(response)) return;
         if (!response.ok) throw new Error('Failed to delete issue');
 
         await loadData();

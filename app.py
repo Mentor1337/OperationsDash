@@ -43,15 +43,16 @@ IGNITION_API_USERNAME = os.getenv('IGNITION_API_USERNAME', '')
 IGNITION_API_PASSWORD = os.getenv('IGNITION_API_PASSWORD', '')
 
 # Admin users (usernames, lowercase, no domain)
-ADMIN_USERS = ['twilcox', 'csmoak', 'tthompson']
+ADMIN_USERS = ['twilcox', 'csmoak', 'tthompson', 'epeschel', 'myumang']
 
 # LDAP Authentication
 try:
-    from ldap_utils import authenticate as ldap_authenticate, sanitize_username, get_user_info
+    from ldap_utils import authenticate as ldap_authenticate, sanitize_username, get_user_info, lookup_username_by_name
 except ImportError:
     def ldap_authenticate(u, p): return u == 'admin' and p == 'admin'
     def sanitize_username(u): return u.split('@')[0].lower().strip() if u else ''
     def get_user_info(u): return {'displayName': u, 'mail': ''}
+    def lookup_username_by_name(f, l): return None
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,7 @@ class Engineer(db.Model):
     __tablename__ = 'engineers'
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False, unique=True)
+    username = db.Column(db.String(100), unique=True, nullable=True)
     role = db.Column(db.String(100))
     total_hours = db.Column(db.Integer, default=40)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -79,6 +81,7 @@ class Engineer(db.Model):
         return {
             'id': self.id,
             'name': self.name,
+            'username': self.username,
             'role': self.role,
             'totalHours': self.total_hours,
             'nonProjectTime': [npt.to_dict() for npt in self.non_project_time]
@@ -424,6 +427,17 @@ def admin_required(f):
     return decorated
 
 
+def login_required(f):
+    """Decorator that requires any authenticated user."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        username = session.get('username')
+        if not username:
+            return jsonify({'error': 'Login required'}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+
 def get_current_user():
     """Return the current session user or None."""
     return session.get('username')
@@ -432,6 +446,43 @@ def get_current_user():
 def is_admin():
     """Check if the current session user is an admin."""
     return get_current_user() in ADMIN_USERS
+
+
+def get_engineer_for_user():
+    """Get the Engineer record for the currently logged-in user, or None."""
+    username = session.get('username')
+    if not username:
+        return None
+    return Engineer.query.filter_by(username=username).first()
+
+
+def can_edit_project(project_id):
+    """Check if current user can edit a project (owner or admin)."""
+    if is_admin():
+        return True
+    eng = get_engineer_for_user()
+    if not eng:
+        return False
+    project = Project.query.get(project_id)
+    return project and project.owner_id == eng.id
+
+
+def is_assigned_to_project(project_id, engineer_id):
+    """Check if an engineer is assigned to a project via tasks."""
+    return Task.query.filter_by(
+        project_id=project_id, engineer_id=engineer_id
+    ).first() is not None
+
+
+def can_edit_plant_issue(issue):
+    """Check if current user can edit a plant issue (creator or admin)."""
+    if is_admin():
+        return True
+    username = get_current_user()
+    if not username:
+        return False
+    return issue.created_by == username
+
 
 
 # ============================================================================
@@ -496,11 +547,83 @@ def admin_panel():
 def auth_status():
     """Return current auth state for the frontend."""
     username = session.get('username')
+    engineer = None
+    if username:
+        engineer = Engineer.query.filter_by(username=username).first()
     return jsonify({
         'authenticated': username is not None,
         'username': username,
-        'isAdmin': username in ADMIN_USERS if username else False
+        'isAdmin': username in ADMIN_USERS if username else False,
+        'engineerId': engineer.id if engineer else None,
+        'engineerName': engineer.name if engineer else None
     })
+
+
+# ============================================================================
+# API Routes - Admin Users & LDAP Binding
+# ============================================================================
+
+@app.route('/api/admin/users', methods=['GET'])
+@admin_required
+def get_admin_users():
+    """Return admin users list and all engineers with their username binding status."""
+    # Get all engineers with username binding info
+    all_engineers = Engineer.query.all()
+    engineer_bindings = []
+    for eng in all_engineers:
+        engineer_bindings.append({
+            'id': eng.id,
+            'name': eng.name,
+            'username': eng.username,
+            'bound': eng.username is not None,
+            'isAdmin': eng.username in ADMIN_USERS if eng.username else False
+        })
+    
+    return jsonify({
+        'adminUsers': ADMIN_USERS,
+        'engineers': engineer_bindings
+    })
+
+
+@app.route('/api/admin/auto-bind-usernames', methods=['POST'])
+@admin_required
+def auto_bind_usernames():
+    """Attempt LDAP lookup for all engineers missing a username."""
+    engineers = Engineer.query.filter(
+        (Engineer.username == None) | (Engineer.username == '')
+    ).all()
+    
+    results = []
+    for eng in engineers:
+        parts = eng.name.strip().split()
+        if len(parts) >= 2:
+            first_name = parts[0]
+            last_name = parts[-1]
+            found_username = lookup_username_by_name(first_name, last_name)
+            if found_username:
+                eng.username = found_username
+                results.append({'id': eng.id, 'name': eng.name, 'username': found_username, 'status': 'bound'})
+            else:
+                results.append({'id': eng.id, 'name': eng.name, 'username': None, 'status': 'not_found'})
+        else:
+            results.append({'id': eng.id, 'name': eng.name, 'username': None, 'status': 'invalid_name'})
+    
+    db.session.commit()
+    bound_count = sum(1 for r in results if r['status'] == 'bound')
+    logger.info(f"Auto-bind: {bound_count}/{len(results)} engineers bound by {session.get('username')}")
+    return jsonify({'results': results, 'boundCount': bound_count, 'totalAttempted': len(results)})
+
+
+@app.route('/api/admin/set-username/<int:engineer_id>', methods=['PUT'])
+@admin_required
+def set_engineer_username(engineer_id):
+    """Manually set a username for an engineer."""
+    eng = Engineer.query.get_or_404(engineer_id)
+    data = request.get_json()
+    eng.username = data.get('username') or None
+    db.session.commit()
+    logger.info(f"Username for engineer {eng.name} set to {eng.username} by {session.get('username')}")
+    return jsonify({'id': eng.id, 'name': eng.name, 'username': eng.username})
 
 
 # ============================================================================
@@ -725,35 +848,64 @@ def get_engineer(id):
 
 
 @app.route('/api/engineers', methods=['POST'])
+@admin_required
 def create_engineer():
     data = request.get_json()
+    name = data.get('name', '')
+    
+    # Try LDAP auto-bind: split name into first/last and look up username
+    username = data.get('username')  # Allow explicit username
+    if not username and name:
+        parts = name.strip().split()
+        if len(parts) >= 2:
+            first_name = parts[0]
+            last_name = parts[-1]
+            username = lookup_username_by_name(first_name, last_name)
+    
     engineer = Engineer(
-        name=data['name'],
+        name=name,
+        username=username,
         role=data.get('role', ''),
         total_hours=data.get('totalHours', 40)
     )
     db.session.add(engineer)
     db.session.commit()
+    
+    logger.info(f"Engineer created: {name} (username: {username or 'none'}) by {session.get('username')}")
     return jsonify(engineer.to_dict()), 201
 
 
 @app.route('/api/engineers/<int:id>', methods=['PUT'])
+@admin_required
 def update_engineer(id):
     engineer = Engineer.query.get_or_404(id)
     data = request.get_json()
     
+    name_changed = False
     if 'name' in data:
+        if data['name'] != engineer.name:
+            name_changed = True
         engineer.name = data['name']
     if 'role' in data:
         engineer.role = data['role']
     if 'totalHours' in data:
         engineer.total_hours = data['totalHours']
+    if 'username' in data:
+        engineer.username = data['username'] or None
+    
+    # If name changed and no username set, try LDAP auto-bind
+    if name_changed and not engineer.username:
+        parts = engineer.name.strip().split()
+        if len(parts) >= 2:
+            engineer.username = lookup_username_by_name(parts[0], parts[-1])
     
     db.session.commit()
+    logger.info(f"Engineer {id} updated by {session.get('username')}")
     return jsonify(engineer.to_dict())
 
 
 @app.route('/api/engineers/<int:id>', methods=['DELETE'])
+@admin_required
 def delete_engineer(id):
     engineer = Engineer.query.get_or_404(id)
 
@@ -768,6 +920,7 @@ def delete_engineer(id):
 
 # Non-Project Time endpoints
 @app.route('/api/engineers/<int:id>/non-project-time', methods=['POST'])
+@admin_required
 def add_non_project_time(id):
     engineer = Engineer.query.get_or_404(id)
     data = request.get_json()
@@ -783,6 +936,7 @@ def add_non_project_time(id):
 
 
 @app.route('/api/engineers/<int:eng_id>/non-project-time/<int:npt_id>', methods=['PUT'])
+@admin_required
 def update_non_project_time(eng_id, npt_id):
     npt = EngineerNonProjectTime.query.get_or_404(npt_id)
     data = request.get_json()
@@ -797,6 +951,7 @@ def update_non_project_time(eng_id, npt_id):
 
 
 @app.route('/api/engineers/<int:eng_id>/non-project-time/<int:npt_id>', methods=['DELETE'])
+@admin_required
 def delete_non_project_time(eng_id, npt_id):
     npt = EngineerNonProjectTime.query.get_or_404(npt_id)
     db.session.delete(npt)
@@ -821,6 +976,7 @@ def get_project(id):
 
 
 @app.route('/api/projects', methods=['POST'])
+@login_required
 def create_project():
     data = request.get_json()
     
@@ -829,6 +985,13 @@ def create_project():
     if not owner_id and 'owner' in data:
         owner = Engineer.query.filter_by(name=data['owner']).first()
         owner_id = owner.id if owner else None
+    
+    # Non-admins: force owner to be themselves
+    if not is_admin():
+        eng = get_engineer_for_user()
+        if not eng:
+            return jsonify({'error': 'You must be registered as an engineer to create projects'}), 403
+        owner_id = eng.id
     
     project = Project(
         name=data['name'],
@@ -860,12 +1023,19 @@ def create_project():
                 db.session.add(yearly_budget)
 
     db.session.commit()
+    logger.info(f"Project '{project.name}' created by {session.get('username')}")
     return jsonify(project.to_dict()), 201
 
 
 @app.route('/api/projects/<int:id>', methods=['PUT'])
+@login_required
 def update_project(id):
     project = Project.query.get_or_404(id)
+    
+    # Permission check: owner or admin
+    if not can_edit_project(id):
+        return jsonify({'error': 'You do not have permission to edit this project'}), 403
+    
     data = request.get_json()
     
     # Track changes for history
@@ -875,12 +1045,14 @@ def update_project(id):
         changes.append(('Name', project.name, data['name']))
         project.name = data['name']
     
-    if 'ownerId' in data:
-        project.owner_id = data['ownerId']
-    elif 'owner' in data:
-        owner = Engineer.query.filter_by(name=data['owner']).first()
-        if owner:
-            project.owner_id = owner.id
+    # Only admins can change project owner
+    if is_admin():
+        if 'ownerId' in data:
+            project.owner_id = data['ownerId']
+        elif 'owner' in data:
+            owner = Engineer.query.filter_by(name=data['owner']).first()
+            if owner:
+                project.owner_id = owner.id
     
     if 'priority' in data and data['priority'] != project.priority:
         changes.append(('Priority', project.priority, data['priority']))
@@ -939,8 +1111,8 @@ def update_project(id):
                 )
                 db.session.add(yearly_budget)
 
-    # Record changes
-    changed_by = project.owner.name if project.owner else 'System'
+    # Record changes - use actual logged-in user
+    changed_by = session.get('username', 'System')
     for field, old_val, new_val in changes:
         ch = ChangeHistory(
             project_id=project.id,
@@ -956,11 +1128,47 @@ def update_project(id):
 
 
 @app.route('/api/projects/<int:id>', methods=['DELETE'])
+@login_required
 def delete_project(id):
+    """Soft-delete: sets status to Cancelled, un-allocates resources."""
     project = Project.query.get_or_404(id)
-    db.session.delete(project)
+    
+    # Permission check: owner or admin
+    if not can_edit_project(id):
+        return jsonify({'error': 'You do not have permission to cancel this project'}), 403
+    
+    changed_by = session.get('username', 'System')
+    old_status = project.status
+    
+    # Set to Cancelled
+    project.status = 'Cancelled'
+    project.progress = 0
+    
+    # Un-allocate all engineer tasks
+    tasks = Task.query.filter_by(project_id=id).all()
+    for task in tasks:
+        db.session.delete(task)
+    
+    # Un-allocate all milestone assignments
+    milestones = Milestone.query.filter_by(project_id=id).all()
+    for milestone in milestones:
+        assignments = MilestoneAssignment.query.filter_by(milestone_id=milestone.id).all()
+        for assignment in assignments:
+            db.session.delete(assignment)
+    
+    # Record change history
+    ch = ChangeHistory(
+        project_id=id,
+        field='Status',
+        old_value=old_status,
+        new_value='Cancelled',
+        changed_by=changed_by
+    )
+    db.session.add(ch)
+    
     db.session.commit()
-    return '', 204
+    logger.info(f"Project '{project.name}' cancelled by {changed_by}")
+    return jsonify(project.to_dict())
 
 
 # ============================================================================
@@ -975,7 +1183,10 @@ def get_project_jira_issues(project_id):
 
 
 @app.route('/api/projects/<int:project_id>/jira', methods=['POST'])
+@login_required
 def add_project_jira_issue(project_id):
+    if not can_edit_project(project_id):
+        return jsonify({'error': 'Permission denied'}), 403
     """Add a Jira issue to a project"""
     project = Project.query.get_or_404(project_id)
     data = request.get_json()
@@ -1004,7 +1215,10 @@ def add_project_jira_issue(project_id):
 
 
 @app.route('/api/projects/<int:project_id>/jira/<jira_key>', methods=['DELETE'])
+@login_required
 def delete_project_jira_issue(project_id, jira_key):
+    if not can_edit_project(project_id):
+        return jsonify({'error': 'Permission denied'}), 403
     """Remove a Jira issue from a project"""
     jira_issue = ProjectJiraIssue.query.filter_by(
         project_id=project_id,
@@ -1022,7 +1236,10 @@ def delete_project_jira_issue(project_id, jira_key):
 # ============================================================================
 
 @app.route('/api/projects/<int:project_id>/expenses', methods=['POST'])
+@login_required
 def add_expense(project_id):
+    if not can_edit_project(project_id):
+        return jsonify({'error': 'Permission denied'}), 403
     project = Project.query.get_or_404(project_id)
     data = request.get_json()
     
@@ -1043,8 +1260,11 @@ def add_expense(project_id):
 
 
 @app.route('/api/expenses/<int:id>', methods=['PUT'])
+@login_required
 def update_expense(id):
     expense = Expense.query.get_or_404(id)
+    if not can_edit_project(expense.project_id):
+        return jsonify({'error': 'Permission denied'}), 403
     project = expense.project
     old_amount = expense.amount
     data = request.get_json()
@@ -1065,8 +1285,11 @@ def update_expense(id):
 
 
 @app.route('/api/expenses/<int:id>', methods=['DELETE'])
+@login_required
 def delete_expense(id):
     expense = Expense.query.get_or_404(id)
+    if not can_edit_project(expense.project_id):
+        return jsonify({'error': 'Permission denied'}), 403
     project = expense.project
     
     # Update project spent
@@ -1082,7 +1305,10 @@ def delete_expense(id):
 # ============================================================================
 
 @app.route('/api/projects/<int:project_id>/milestones', methods=['POST'])
+@login_required
 def add_milestone(project_id):
+    if not can_edit_project(project_id):
+        return jsonify({'error': 'Permission denied'}), 403
     project = Project.query.get_or_404(project_id)
     data = request.get_json()
 
@@ -1115,9 +1341,12 @@ def add_milestone(project_id):
 
 
 @app.route('/api/milestones/<int:id>', methods=['PUT'])
+@login_required
 def update_milestone(id):
     milestone = Milestone.query.get_or_404(id)
     project = milestone.project
+    if not can_edit_project(project.id):
+        return jsonify({'error': 'Permission denied'}), 403
     data = request.get_json()
 
     # Track changes for history
@@ -1148,7 +1377,7 @@ def update_milestone(id):
         recalculate_milestone_dates(milestone.project_id)
 
     # Record changes
-    changed_by = project.owner.name if project.owner else 'System'
+    changed_by = session.get('username', 'System')
     for field, old_val, new_val in changes:
         ch = ChangeHistory(
             project_id=project.id,
@@ -1164,9 +1393,12 @@ def update_milestone(id):
 
 
 @app.route('/api/milestones/<int:id>', methods=['DELETE'])
+@login_required
 def delete_milestone(id):
     milestone = Milestone.query.get_or_404(id)
     project = milestone.project
+    if not can_edit_project(project.id):
+        return jsonify({'error': 'Permission denied'}), 403
     project_id = milestone.project_id
     milestone_name = milestone.name
     milestone_date = milestone.planned_date.strftime('%Y-%m-%d') if milestone.planned_date else ''
@@ -1224,6 +1456,7 @@ def get_milestone_assignments(milestone_id):
 
 
 @app.route('/api/milestones/<int:milestone_id>/assignments', methods=['POST'])
+@login_required
 def add_milestone_assignment(milestone_id):
     """Assign an engineer to a milestone"""
     milestone = Milestone.query.get_or_404(milestone_id)
@@ -1232,6 +1465,12 @@ def add_milestone_assignment(milestone_id):
     engineer_id = data.get('engineerId')
     if not engineer_id:
         return jsonify({'error': 'engineerId is required'}), 400
+
+    # Non-owners can only assign themselves
+    if not can_edit_project(milestone.project_id):
+        eng = get_engineer_for_user()
+        if not eng or eng.id != engineer_id:
+            return jsonify({'error': 'You can only assign yourself to milestones on projects you do not own'}), 403
 
     # Check engineer exists
     engineer = Engineer.query.get(engineer_id)
@@ -1261,6 +1500,7 @@ def add_milestone_assignment(milestone_id):
 
 
 @app.route('/api/milestone-assignments/<int:id>', methods=['PUT'])
+@login_required
 def update_milestone_assignment(id):
     """Update an existing milestone assignment"""
     assignment = MilestoneAssignment.query.get_or_404(id)
@@ -1274,6 +1514,7 @@ def update_milestone_assignment(id):
 
 
 @app.route('/api/milestone-assignments/<int:id>', methods=['DELETE'])
+@login_required
 def delete_milestone_assignment(id):
     """Remove an engineer assignment from a milestone"""
     assignment = MilestoneAssignment.query.get_or_404(id)
@@ -1287,7 +1528,10 @@ def delete_milestone_assignment(id):
 # ============================================================================
 
 @app.route('/api/projects/<int:project_id>/tasks', methods=['POST'])
+@login_required
 def add_task(project_id):
+    if not can_edit_project(project_id):
+        return jsonify({'error': 'Permission denied'}), 403
     Project.query.get_or_404(project_id)
     data = request.get_json()
     
@@ -1316,8 +1560,14 @@ def add_task(project_id):
 
 
 @app.route('/api/tasks/<int:id>', methods=['PUT'])
+@login_required
 def update_task(id):
     task = Task.query.get_or_404(id)
+    # Owner/admin can update any task; assigned engineer can update own hours
+    eng = get_engineer_for_user()
+    if not can_edit_project(task.project_id):
+        if not eng or eng.id != task.engineer_id:
+            return jsonify({'error': 'You can only update your own task hours'}), 403
     data = request.get_json()
     
     if 'hoursPerWeek' in data:
@@ -1328,8 +1578,11 @@ def update_task(id):
 
 
 @app.route('/api/tasks/<int:id>', methods=['DELETE'])
+@login_required
 def delete_task(id):
     task = Task.query.get_or_404(id)
+    if not can_edit_project(task.project_id):
+        return jsonify({'error': 'Permission denied'}), 403
     db.session.delete(task)
     db.session.commit()
     return '', 204
@@ -1354,6 +1607,7 @@ def get_plant_issue(id):
 
 
 @app.route('/api/plant-issues', methods=['POST'])
+@login_required
 def create_plant_issue():
     """Create a new plant issue"""
     data = request.get_json()
@@ -1378,9 +1632,12 @@ def create_plant_issue():
 
 
 @app.route('/api/plant-issues/<int:id>', methods=['PUT'])
+@login_required
 def update_plant_issue(id):
     """Update an existing plant issue"""
     issue = PlantIssue.query.get_or_404(id)
+    if not can_edit_plant_issue(issue):
+        return jsonify({'error': 'You can only edit plant issues you created'}), 403
     data = request.get_json()
 
     # Track changes for history
@@ -1453,9 +1710,12 @@ def update_plant_issue(id):
 
 
 @app.route('/api/plant-issues/<int:id>', methods=['DELETE'])
+@login_required
 def delete_plant_issue(id):
     """Delete a plant issue"""
     issue = PlantIssue.query.get_or_404(id)
+    if not can_edit_plant_issue(issue):
+        return jsonify({'error': 'Permission denied'}), 403
     db.session.delete(issue)
     db.session.commit()
     return '', 204
@@ -1473,9 +1733,12 @@ def get_plant_issue_assignments(issue_id):
 
 
 @app.route('/api/plant-issues/<int:issue_id>/assignments', methods=['POST'])
+@login_required
 def add_plant_issue_assignment(issue_id):
     """Assign an engineer to a plant issue"""
     issue = PlantIssue.query.get_or_404(issue_id)
+    if not can_edit_plant_issue(issue):
+        return jsonify({'error': 'Permission denied'}), 403
     data = request.get_json()
 
     engineer_id = data.get('engineerId')
@@ -1505,6 +1768,7 @@ def add_plant_issue_assignment(issue_id):
 
 
 @app.route('/api/plant-issue-assignments/<int:id>', methods=['PUT'])
+@login_required
 def update_plant_issue_assignment(id):
     """Update an existing plant issue assignment"""
     assignment = PlantIssueAssignment.query.get_or_404(id)
@@ -1518,6 +1782,7 @@ def update_plant_issue_assignment(id):
 
 
 @app.route('/api/plant-issue-assignments/<int:id>', methods=['DELETE'])
+@login_required
 def delete_plant_issue_assignment(id):
     """Remove an engineer assignment from an issue"""
     assignment = PlantIssueAssignment.query.get_or_404(id)

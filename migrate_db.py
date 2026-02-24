@@ -55,6 +55,17 @@ def migrate_database(db_path='instance/operations.db'):
         else:
             print("✓ milestones.hours_per_week already exists")
         
+        # Check and add engineers.username column
+        cursor.execute("PRAGMA table_info(engineers)")
+        engineer_cols = [col[1] for col in cursor.fetchall()]
+        
+        if 'username' not in engineer_cols:
+            print("Adding 'username' column to engineers table...")
+            cursor.execute("ALTER TABLE engineers ADD COLUMN username VARCHAR(100)")
+            migrations_applied.append("engineers.username")
+        else:
+            print("✓ engineers.username already exists")
+        
         conn.commit()
         
         if migrations_applied:
