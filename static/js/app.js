@@ -250,27 +250,27 @@ function getFilteredProjects() {
 
 function handleSearch(value) {
     searchQuery = value;
-    renderProjects();
+    updateProjectList();
 }
 
 function handleOwnerFilter(value) {
     ownerFilter = value;
-    renderProjects();
+    updateProjectList();
 }
 
 function handlePriorityFilter(value) {
     priorityFilter = value;
-    renderProjects();
+    updateProjectList();
 }
 
 function handleStatusFilter(value) {
     statusFilter = value;
-    renderProjects();
+    updateProjectList();
 }
 
 function handleLocationFilter(value) {
     locationFilter = value;
-    renderProjects();
+    updateProjectList();
 }
 
 function clearFilters() {
