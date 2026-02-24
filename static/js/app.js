@@ -15,6 +15,16 @@ let locationFilter = 'all';
 let expandedProjects = new Set();
 let editingMilestoneId = null;
 
+// Plant Issues state
+let plantIssues = [];
+let issueSearchQuery = '';
+let issueStatusFilter = 'all';
+let issueSeverityFilter = 'all';
+let issueLocationFilter = 'all';
+let issueCategoryFilter = 'all';
+let expandedIssues = new Set();
+let currentIssue = null;
+
 // Date range selectors
 let ganttDateRange = String(new Date().getFullYear());
 let ganttCustomStart = '';
@@ -60,9 +70,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
 async function loadData() {
     try {
-        [projects, engineers] = await Promise.all([
+        [projects, engineers, plantIssues] = await Promise.all([
             fetch(`${API}/api/projects`).then(r => r.json()),
-            fetch(`${API}/api/engineers`).then(r => r.json())
+            fetch(`${API}/api/engineers`).then(r => r.json()),
+            fetch(`${API}/api/plant-issues`).then(r => r.json())
         ]);
         renderCurrentTab();
         populateOwnerDropdowns();
@@ -98,6 +109,7 @@ function renderCurrentTab() {
         case 'milestones': renderMilestones(); break;
         case 'resources': renderResources(); break;
         case 'budget': renderBudget(); break;
+        case 'issues': renderIssues(); break;
     }
 }
 
@@ -144,24 +156,32 @@ function renderProjects() {
                     <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleLocationFilter(this.value)">
                         <option value="all" ${locationFilter === 'all' ? 'selected' : ''}>All Locations</option>
                         ${locations.map(loc => `<option value="${loc}" ${locationFilter === loc ? 'selected' : ''}>${loc}</option>`).join('')}
+                        <option disabled>──────────</option>
+                        ${locations.map(loc => `<option value="not:${loc}" ${locationFilter === 'not:' + loc ? 'selected' : ''}>Not ${loc}</option>`).join('')}
                     </select>
                 </div>
                 <div>
                     <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleOwnerFilter(this.value)">
                         <option value="all" ${ownerFilter === 'all' ? 'selected' : ''}>All Owners</option>
                         ${uniqueOwners.map(owner => `<option value="${owner}" ${ownerFilter === owner ? 'selected' : ''}>${owner}</option>`).join('')}
+                        <option disabled>──────────</option>
+                        ${uniqueOwners.map(owner => `<option value="not:${owner}" ${ownerFilter === 'not:' + owner ? 'selected' : ''}>Not ${owner}</option>`).join('')}
                     </select>
                 </div>
                 <div>
                     <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handlePriorityFilter(this.value)">
                         <option value="all" ${priorityFilter === 'all' ? 'selected' : ''}>All Priorities</option>
                         ${priorities.map(p => `<option value="${p}" ${priorityFilter === p ? 'selected' : ''}>${p}</option>`).join('')}
+                        <option disabled>──────────</option>
+                        ${priorities.map(p => `<option value="not:${p}" ${priorityFilter === 'not:' + p ? 'selected' : ''}>Not ${p}</option>`).join('')}
                     </select>
                 </div>
                 <div>
                     <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleStatusFilter(this.value)">
                         <option value="all" ${statusFilter === 'all' ? 'selected' : ''}>All Statuses</option>
                         ${statuses.map(s => `<option value="${s}" ${statusFilter === s ? 'selected' : ''}>${s}</option>`).join('')}
+                        <option disabled>──────────</option>
+                        ${statuses.map(s => `<option value="not:${s}" ${statusFilter === 'not:' + s ? 'selected' : ''}>Not ${s}</option>`).join('')}
                     </select>
                 </div>
             </div>
@@ -186,10 +206,35 @@ function getFilteredProjects() {
             p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
             p.owner.toLowerCase().includes(searchQuery.toLowerCase()) ||
             (p.notes && p.notes.toLowerCase().includes(searchQuery.toLowerCase()));
-        const matchesOwner = ownerFilter === 'all' || p.owner === ownerFilter;
-        const matchesPriority = priorityFilter === 'all' || p.priority === priorityFilter;
-        const matchesStatus = statusFilter === 'all' || p.status === statusFilter;
-        const matchesLocation = locationFilter === 'all' || p.location === locationFilter;
+
+        // Handle owner filter with include/exclude and milestone assignments
+        let matchesOwner;
+        if (ownerFilter === 'all') {
+            matchesOwner = true;
+        } else if (ownerFilter.startsWith('not:')) {
+            const excludeOwner = ownerFilter.slice(4);
+            const isAssignedToMilestone = (p.milestones || []).some(m =>
+                (m.assignments || []).some(a => a.engineer === excludeOwner)
+            );
+            matchesOwner = p.owner !== excludeOwner && !isAssignedToMilestone;
+        } else {
+            const isAssignedToMilestone = (p.milestones || []).some(m =>
+                (m.assignments || []).some(a => a.engineer === ownerFilter)
+            );
+            matchesOwner = p.owner === ownerFilter || isAssignedToMilestone;
+        }
+
+        // Handle include/exclude for other filters
+        const matchesPriority = priorityFilter === 'all' ? true :
+            priorityFilter.startsWith('not:') ? p.priority !== priorityFilter.slice(4) :
+            p.priority === priorityFilter;
+        const matchesStatus = statusFilter === 'all' ? true :
+            statusFilter.startsWith('not:') ? p.status !== statusFilter.slice(4) :
+            p.status === statusFilter;
+        const matchesLocation = locationFilter === 'all' ? true :
+            locationFilter.startsWith('not:') ? p.location !== locationFilter.slice(4) :
+            p.location === locationFilter;
+
         return matchesSearch && matchesOwner && matchesPriority && matchesStatus && matchesLocation;
     });
 }
@@ -1888,8 +1933,9 @@ function renderResources() {
         const weekEnd = new Date(weekStart);
         weekEnd.setDate(weekEnd.getDate() + 7);
         const milestoneHours = getMilestoneHoursForEngineer(eng.name, weekStart, weekEnd);
+        const issueHours = getPlantIssueHoursForEngineer(eng.name, weekStart, weekEnd);
 
-        const projectHours = taskHours + milestoneHours;
+        const projectHours = taskHours + milestoneHours + issueHours;
         const available = eng.totalHours - nonProjectTotal - projectHours;
         const utilization = Math.round(((eng.totalHours - available) / eng.totalHours) * 100);
         return { ...eng, nonProjectTotal, projectHours, available, utilization };
@@ -2124,6 +2170,48 @@ function getMilestoneHoursForEngineer(engineerName, startDate, endDate) {
     return totalMilestoneHours;
 }
 
+// Helper function to calculate plant issue hours for an engineer in a given date range
+function getPlantIssueHoursForEngineer(engineerName, startDate, endDate) {
+    let totalIssueHours = 0;
+
+    plantIssues.forEach(issue => {
+        // Skip issues without start date
+        if (!issue.startDate) return;
+
+        // Parse dates and normalize to local time to avoid timezone issues
+        const iStartParts = issue.startDate.split('-');
+        const iStart = new Date(iStartParts[0], iStartParts[1] - 1, iStartParts[2]);
+
+        // For closed issues, use actual_end_date; otherwise use target or far future
+        let iEnd;
+        if (issue.status === 'Closed' && issue.actualEndDate) {
+            const endParts = issue.actualEndDate.split('-');
+            iEnd = new Date(endParts[0], endParts[1] - 1, endParts[2], 23, 59, 59);
+        } else if (issue.actualEndDate) {
+            const endParts = issue.actualEndDate.split('-');
+            iEnd = new Date(endParts[0], endParts[1] - 1, endParts[2], 23, 59, 59);
+        } else if (issue.targetEndDate) {
+            const endParts = issue.targetEndDate.split('-');
+            iEnd = new Date(endParts[0], endParts[1] - 1, endParts[2], 23, 59, 59);
+        } else {
+            iEnd = new Date(new Date().getFullYear() + 1, 11, 31, 23, 59, 59);
+        }
+
+        // Check if issue overlaps with the given date range
+        if (iStart <= endDate && iEnd >= startDate) {
+            // Look for this engineer's assignment to this issue
+            const assignments = issue.assignments || [];
+            const assignment = assignments.find(a => a.engineer === engineerName);
+
+            if (assignment) {
+                totalIssueHours += assignment.hoursPerWeek;
+            }
+        }
+    });
+
+    return totalIssueHours;
+}
+
 function renderCurrentCapacityChart() {
     const ctx = document.getElementById('current-capacity-chart');
     if (!ctx) return;
@@ -2146,8 +2234,9 @@ function renderCurrentCapacityChart() {
         const weekEnd = new Date(weekStart);
         weekEnd.setDate(weekEnd.getDate() + 7);
         const milestoneHours = getMilestoneHoursForEngineer(eng.name, weekStart, weekEnd);
-        
-        const totalProjectHours = projectHours + milestoneHours;
+        const issueHours = getPlantIssueHoursForEngineer(eng.name, weekStart, weekEnd);
+
+        const totalProjectHours = projectHours + milestoneHours + issueHours;
         const available = eng.totalHours - nonProjectTotal - totalProjectHours;
         
         return {
@@ -2249,9 +2338,10 @@ function renderTeamCapacityOverTime() {
                 
                 // Add milestone hours for this month
                 const milestoneHours = getMilestoneHoursForEngineer(eng.name, monthStart, monthEnd);
-                
+                const issueHours = getPlantIssueHoursForEngineer(eng.name, monthStart, monthEnd);
+
                 totalNonProject += nonProject;
-                totalProject += projectHours + milestoneHours;
+                totalProject += projectHours + milestoneHours + issueHours;
                 totalCapacity += eng.totalHours;
             });
             
@@ -2476,7 +2566,30 @@ function renderIndividualTrendsChart() {
                 });
             });
 
-            const utilization = ((nonProject + projectHours + milestoneHours) / eng.totalHours) * 100;
+            // Add plant issue hours for this week
+            let issueHours = 0;
+            plantIssues.forEach(issue => {
+                if (issue.status === 'Closed') return;
+                if (!issue.startDate) return;
+                const iStart = new Date(issue.startDate);
+                const iEnd = issue.actualEndDate ? new Date(issue.actualEndDate) :
+                             issue.targetEndDate ? new Date(issue.targetEndDate) :
+                             new Date(new Date().getFullYear() + 1, 11, 31);
+                if (iStart <= week.end && iEnd >= week.start) {
+                    const assignments = issue.assignments || [];
+                    const assignment = assignments.find(a => a.engineer === eng.name);
+                    if (assignment) {
+                        issueHours += assignment.hoursPerWeek;
+                        contributingProjects.push({
+                            name: issue.title,
+                            hours: assignment.hoursPerWeek,
+                            type: 'issue'
+                        });
+                    }
+                }
+            });
+
+            const utilization = ((nonProject + projectHours + milestoneHours + issueHours) / eng.totalHours) * 100;
 
             // Store project details for this data point
             const key = `${eng.name}-${weekIdx}`;
@@ -2485,6 +2598,7 @@ function renderIndividualTrendsChart() {
                 nonProject: nonProject,
                 projectHours: projectHours,
                 milestoneHours: milestoneHours,
+                issueHours: issueHours,
                 projects: contributingProjects
             };
 
@@ -2636,9 +2750,10 @@ function renderMonthlyBreakdownTable() {
 
             // Add milestone hours
             const milestoneHours = getMilestoneHoursForEngineer(eng.name, monthStart, monthEnd);
+            const issueHours = getPlantIssueHoursForEngineer(eng.name, monthStart, monthEnd);
 
-            const available = eng.totalHours - nonProject - projectHours - milestoneHours;
-            const utilization = Math.round(((nonProject + projectHours + milestoneHours) / eng.totalHours) * 100);
+            const available = eng.totalHours - nonProject - projectHours - milestoneHours - issueHours;
+            const utilization = Math.round(((nonProject + projectHours + milestoneHours + issueHours) / eng.totalHours) * 100);
 
             const utilizationColor = utilization > 100 ? 'text-red-600' :
                                       utilization > 85 ? 'text-yellow-600' :
@@ -2649,6 +2764,7 @@ function renderMonthlyBreakdownTable() {
                     <td class="p-2 text-center">
                         <div class="text-xs">
                             <div class="text-gray-600">P:${totalProjectHours}</div>
+                            <div class="text-gray-600">T:${issueHours}</div>
                             <div class="text-gray-600">NP:${nonProject}</div>
                             <div class="text-gray-600">A:${available}</div>
                             <div class="font-semibold mt-1 ${utilizationColor}">${utilization}%</div>
@@ -2676,6 +2792,7 @@ function renderMonthlyBreakdownTable() {
         let totalNonProject = 0;
         let totalProject = 0;
         let totalMilestone = 0;
+        let totalIssue = 0;
         let totalCapacity = 0;
 
         engineers.forEach(eng => {
@@ -2690,15 +2807,17 @@ function renderMonthlyBreakdownTable() {
                 .filter(t => t.engineer === eng.name)
                 .reduce((sum, t) => sum + t.hoursPerWeek, 0);
             const milestoneHours = getMilestoneHoursForEngineer(eng.name, monthStart, monthEnd);
+            const issueHours = getPlantIssueHoursForEngineer(eng.name, monthStart, monthEnd);
 
             totalNonProject += nonProject;
             totalProject += projectHours;
             totalMilestone += milestoneHours;
+            totalIssue += issueHours;
             totalCapacity += eng.totalHours;
         });
 
-        const totalAvailable = totalCapacity - totalNonProject - totalProject - totalMilestone;
-        const totalUtilization = Math.round(((totalNonProject + totalProject + totalMilestone) / totalCapacity) * 100);
+        const totalAvailable = totalCapacity - totalNonProject - totalProject - totalMilestone - totalIssue;
+        const totalUtilization = Math.round(((totalNonProject + totalProject + totalMilestone + totalIssue) / totalCapacity) * 100);
 
         const utilizationColor = totalUtilization > 100 ? 'text-red-600' :
                                   totalUtilization > 85 ? 'text-yellow-600' :
@@ -2709,6 +2828,7 @@ function renderMonthlyBreakdownTable() {
                 <td class="p-2 text-center">
                     <div class="text-xs">
                         <div class="text-gray-700">P:${totalProjectCombined}</div>
+                        <div class="text-gray-700">T:${totalIssue}</div>
                         <div class="text-gray-700">NP:${totalNonProject}</div>
                         <div class="text-gray-700">A:${totalAvailable}</div>
                         <div class="font-bold mt-1 ${utilizationColor}">${totalUtilization}%</div>
@@ -2843,6 +2963,10 @@ async function deleteEngineer() {
 // ============================================================================
 // Utilities
 // ============================================================================
+
+function openModal(type) {
+    document.getElementById(`modal-${type}`).classList.remove('hidden');
+}
 
 function closeModal(type) {
     document.getElementById(`modal-${type}`).classList.add('hidden');
@@ -3453,5 +3577,513 @@ async function checkMaintenanceMessage() {
         }
     } catch (err) {
         // Silently fail - maintenance check is non-critical
+    }
+}
+
+// ============================================================================
+// Plant Issues Tab
+// ============================================================================
+
+function renderIssues() {
+    const container = document.getElementById('content-issues');
+    const locations = ['Module Line', 'Pack Line', 'Line Agnostic'];
+    const severities = ['Critical', 'High', 'Medium', 'Low'];
+    const statuses = ['Open', 'In Progress', 'Resolved', 'Closed'];
+    const categories = ['Equipment', 'Quality', 'Process', 'Safety', 'Other'];
+    const hasActiveFilters = issueStatusFilter !== 'all' || issueSeverityFilter !== 'all' ||
+                            issueLocationFilter !== 'all' || issueCategoryFilter !== 'all';
+    const filtered = getFilteredIssues();
+
+    // Summary counts
+    const openCount = plantIssues.filter(i => i.status === 'Open').length;
+    const inProgressCount = plantIssues.filter(i => i.status === 'In Progress').length;
+    const criticalCount = plantIssues.filter(i => i.severity === 'Critical' && !['Closed', 'Resolved'].includes(i.status)).length;
+
+    container.innerHTML = `
+        <div class="flex justify-between items-center mb-4">
+            <h2 class="text-2xl font-bold text-gray-800">Plant Issues</h2>
+            <button onclick="openIssueModal()" class="flex items-center space-x-2 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                <span>Report Issue</span>
+            </button>
+        </div>
+
+        <!-- Summary Cards -->
+        <div class="grid grid-cols-4 gap-4 mb-4">
+            <div class="bg-white rounded-lg shadow-md p-4">
+                <p class="text-sm text-gray-600">Open Issues</p>
+                <p class="text-3xl font-bold text-yellow-600">${openCount}</p>
+            </div>
+            <div class="bg-white rounded-lg shadow-md p-4">
+                <p class="text-sm text-gray-600">In Progress</p>
+                <p class="text-3xl font-bold text-blue-600">${inProgressCount}</p>
+            </div>
+            <div class="bg-white rounded-lg shadow-md p-4">
+                <p class="text-sm text-gray-600">Critical Active</p>
+                <p class="text-3xl font-bold text-red-600">${criticalCount}</p>
+            </div>
+            <div class="bg-white rounded-lg shadow-md p-4">
+                <p class="text-sm text-gray-600">Total Issues</p>
+                <p class="text-3xl font-bold text-gray-800">${plantIssues.length}</p>
+            </div>
+        </div>
+
+        <!-- Filters -->
+        <div class="bg-white rounded-lg shadow-md p-4 mb-4">
+            <div class="flex items-center space-x-4 mb-4">
+                <svg class="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"></path></svg>
+                <span class="font-medium text-gray-700">Filters:</span>
+                ${hasActiveFilters ? `<button onclick="clearIssueFilters()" class="text-sm text-orange-600 hover:text-orange-700">Clear Filters</button>` : ''}
+                <span class="text-sm text-gray-600">Showing ${filtered.length} of ${plantIssues.length} issues</span>
+            </div>
+            <div class="grid grid-cols-5 gap-4">
+                <div class="flex-1 relative">
+                    <input type="text" id="issue-search" placeholder="Search issues..."
+                        class="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg"
+                        value="${issueSearchQuery}" oninput="handleIssueSearch(this.value)">
+                    <svg class="w-5 h-5 absolute left-3 top-2.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                    </svg>
+                </div>
+                <select class="px-3 py-2 border border-gray-300 rounded-lg" onchange="handleIssueLocationFilter(this.value)">
+                    <option value="all" ${issueLocationFilter === 'all' ? 'selected' : ''}>All Locations</option>
+                    ${locations.map(loc => `<option value="${loc}" ${issueLocationFilter === loc ? 'selected' : ''}>${loc}</option>`).join('')}
+                    <option disabled>──────────</option>
+                    ${locations.map(loc => `<option value="not:${loc}" ${issueLocationFilter === 'not:' + loc ? 'selected' : ''}>Not ${loc}</option>`).join('')}
+                </select>
+                <select class="px-3 py-2 border border-gray-300 rounded-lg" onchange="handleIssueSeverityFilter(this.value)">
+                    <option value="all" ${issueSeverityFilter === 'all' ? 'selected' : ''}>All Severities</option>
+                    ${severities.map(s => `<option value="${s}" ${issueSeverityFilter === s ? 'selected' : ''}>${s}</option>`).join('')}
+                    <option disabled>──────────</option>
+                    ${severities.map(s => `<option value="not:${s}" ${issueSeverityFilter === 'not:' + s ? 'selected' : ''}>Not ${s}</option>`).join('')}
+                </select>
+                <select class="px-3 py-2 border border-gray-300 rounded-lg" onchange="handleIssueStatusFilter(this.value)">
+                    <option value="all" ${issueStatusFilter === 'all' ? 'selected' : ''}>All Statuses</option>
+                    ${statuses.map(s => `<option value="${s}" ${issueStatusFilter === s ? 'selected' : ''}>${s}</option>`).join('')}
+                    <option disabled>──────────</option>
+                    ${statuses.map(s => `<option value="not:${s}" ${issueStatusFilter === 'not:' + s ? 'selected' : ''}>Not ${s}</option>`).join('')}
+                </select>
+                <select class="px-3 py-2 border border-gray-300 rounded-lg" onchange="handleIssueCategoryFilter(this.value)">
+                    <option value="all" ${issueCategoryFilter === 'all' ? 'selected' : ''}>All Categories</option>
+                    ${categories.map(c => `<option value="${c}" ${issueCategoryFilter === c ? 'selected' : ''}>${c}</option>`).join('')}
+                    <option disabled>──────────</option>
+                    ${categories.map(c => `<option value="not:${c}" ${issueCategoryFilter === 'not:' + c ? 'selected' : ''}>Not ${c}</option>`).join('')}
+                </select>
+            </div>
+        </div>
+
+        <div class="space-y-4" id="issues-list"></div>
+    `;
+
+    const list = document.getElementById('issues-list');
+    if (filtered.length === 0) {
+        list.innerHTML = '<p class="text-gray-500 text-center py-8">No issues match your filters</p>';
+    } else {
+        filtered.forEach(issue => {
+            list.innerHTML += createIssueCard(issue);
+        });
+    }
+}
+
+function getFilteredIssues() {
+    return plantIssues.filter(i => {
+        const matchesSearch = issueSearchQuery === '' ||
+            i.title.toLowerCase().includes(issueSearchQuery.toLowerCase()) ||
+            (i.description && i.description.toLowerCase().includes(issueSearchQuery.toLowerCase()));
+
+        // Handle include/exclude filters (prefix "not:" means exclude)
+        const matchesStatus = issueStatusFilter === 'all' ? true :
+            issueStatusFilter.startsWith('not:') ? i.status !== issueStatusFilter.slice(4) :
+            i.status === issueStatusFilter;
+        const matchesSeverity = issueSeverityFilter === 'all' ? true :
+            issueSeverityFilter.startsWith('not:') ? i.severity !== issueSeverityFilter.slice(4) :
+            i.severity === issueSeverityFilter;
+        const matchesLocation = issueLocationFilter === 'all' ? true :
+            issueLocationFilter.startsWith('not:') ? i.location !== issueLocationFilter.slice(4) :
+            i.location === issueLocationFilter;
+        const matchesCategory = issueCategoryFilter === 'all' ? true :
+            issueCategoryFilter.startsWith('not:') ? i.category !== issueCategoryFilter.slice(4) :
+            i.category === issueCategoryFilter;
+
+        return matchesSearch && matchesStatus && matchesSeverity && matchesLocation && matchesCategory;
+    });
+}
+
+function handleIssueSearch(value) {
+    issueSearchQuery = value;
+    renderIssues();
+}
+
+function handleIssueStatusFilter(value) {
+    issueStatusFilter = value;
+    renderIssues();
+}
+
+function handleIssueSeverityFilter(value) {
+    issueSeverityFilter = value;
+    renderIssues();
+}
+
+function handleIssueLocationFilter(value) {
+    issueLocationFilter = value;
+    renderIssues();
+}
+
+function handleIssueCategoryFilter(value) {
+    issueCategoryFilter = value;
+    renderIssues();
+}
+
+function clearIssueFilters() {
+    issueSearchQuery = '';
+    issueStatusFilter = 'all';
+    issueSeverityFilter = 'all';
+    issueLocationFilter = 'all';
+    issueCategoryFilter = 'all';
+    renderIssues();
+}
+
+function getIssueSeverityClass(severity) {
+    switch(severity) {
+        case 'Critical': return 'bg-red-100 text-red-800';
+        case 'High': return 'bg-orange-100 text-orange-800';
+        case 'Medium': return 'bg-yellow-100 text-yellow-800';
+        case 'Low': return 'bg-green-100 text-green-800';
+        default: return 'bg-gray-100 text-gray-800';
+    }
+}
+
+function getIssueStatusClass(status) {
+    switch(status) {
+        case 'Open': return 'bg-yellow-100 text-yellow-800';
+        case 'In Progress': return 'bg-blue-100 text-blue-800';
+        case 'Resolved': return 'bg-green-100 text-green-800';
+        case 'Closed': return 'bg-gray-100 text-gray-800';
+        default: return 'bg-gray-100 text-gray-800';
+    }
+}
+
+function isIssueOverdue(issue) {
+    if (!issue.targetEndDate || ['Closed', 'Resolved'].includes(issue.status)) return false;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const target = new Date(issue.targetEndDate);
+    return target < today;
+}
+
+function createIssueCard(issue) {
+    const isExpanded = expandedIssues.has(issue.id);
+    const overdue = isIssueOverdue(issue);
+    const totalHours = (issue.assignments || []).reduce((sum, a) => sum + a.hoursPerWeek, 0);
+    const assignedNames = (issue.assignments || []).map(a => a.engineer).join(', ') || 'Unassigned';
+    const dueDate = issue.targetEndDate ? new Date(issue.targetEndDate).toLocaleDateString() : 'No due date';
+
+    return `
+        <div class="bg-white rounded-lg shadow-md overflow-hidden ${overdue ? 'border-l-4 border-red-500' : ''}">
+            <div class="p-4 cursor-pointer hover:bg-gray-50" onclick="toggleIssue(${issue.id})">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-3">
+                        <svg class="w-5 h-5 text-gray-400 transform transition-transform ${isExpanded ? 'rotate-90' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                        </svg>
+                        <div>
+                            <h3 class="font-semibold text-gray-800">${issue.title}</h3>
+                            <p class="text-sm text-gray-600">${issue.location || 'No Location'} ${issue.category ? '| ' + issue.category : ''}</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center space-x-3">
+                        ${overdue ? '<span class="px-2 py-1 rounded-full text-xs font-medium bg-red-600 text-white">OVERDUE</span>' : ''}
+                        <span class="px-2 py-1 rounded-full text-xs font-medium ${getIssueSeverityClass(issue.severity)}">${issue.severity}</span>
+                        <span class="px-2 py-1 rounded-full text-xs font-medium ${getIssueStatusClass(issue.status)}">${issue.status}</span>
+                        <span class="text-sm text-gray-600">${totalHours}h/wk</span>
+                    </div>
+                </div>
+
+                <!-- Owner and Due Date row -->
+                <div class="mt-2 flex items-center space-x-4 text-sm text-gray-600">
+                    <span><strong>Owner:</strong> ${assignedNames}</span>
+                    <span><strong>Due:</strong> ${dueDate}</span>
+                </div>
+
+                <!-- Progress bar -->
+                <div class="mt-3">
+                    <div class="flex justify-between text-sm text-gray-600 mb-1">
+                        <span>Progress</span>
+                        <span>${issue.progress}%</span>
+                    </div>
+                    <div class="w-full bg-gray-200 rounded-full h-2">
+                        <div class="bg-blue-600 rounded-full h-2" style="width: ${issue.progress}%"></div>
+                    </div>
+                </div>
+            </div>
+
+            ${isExpanded ? `
+                <div class="border-t border-gray-200 p-4 bg-gray-50">
+                    <div class="grid grid-cols-2 gap-4 mb-4">
+                        <div>
+                            <p class="text-sm text-gray-600"><strong>Start Date:</strong> ${issue.startDate || 'Not set'}</p>
+                            <p class="text-sm text-gray-600"><strong>Target End:</strong> ${issue.targetEndDate || 'Not set'}</p>
+                            <p class="text-sm text-gray-600"><strong>Actual End:</strong> ${issue.actualEndDate || 'Not resolved'}</p>
+                        </div>
+                        <div>
+                            <p class="text-sm text-gray-600"><strong>Created:</strong> ${issue.createdAt ? new Date(issue.createdAt).toLocaleDateString() : 'Unknown'}</p>
+                            <p class="text-sm text-gray-600"><strong>Created By:</strong> ${issue.createdBy || 'System'}</p>
+                        </div>
+                    </div>
+
+                    ${issue.description ? `
+                        <div class="mb-4">
+                            <p class="text-sm font-medium text-gray-700">Description:</p>
+                            <p class="text-sm text-gray-600">${issue.description}</p>
+                        </div>
+                    ` : ''}
+
+                    ${issue.resolutionNotes ? `
+                        <div class="mb-4">
+                            <p class="text-sm font-medium text-gray-700">Resolution Notes:</p>
+                            <p class="text-sm text-gray-600">${issue.resolutionNotes}</p>
+                        </div>
+                    ` : ''}
+
+                    <!-- Assignments -->
+                    <div class="mb-4">
+                        <div class="flex justify-between items-center mb-2">
+                            <p class="text-sm font-medium text-gray-700">Assigned Engineers (${(issue.assignments || []).length})</p>
+                            <button onclick="openIssueAssignmentModal(${issue.id})" class="text-sm text-orange-600 hover:text-orange-700">Manage</button>
+                        </div>
+                        <div class="flex flex-wrap gap-2">
+                            ${(issue.assignments || []).length === 0 ? '<span class="text-sm text-gray-500">No engineers assigned</span>' :
+                                (issue.assignments || []).map(a => `
+                                    <span class="px-2 py-1 bg-orange-100 text-orange-800 rounded text-sm">${a.engineer} (${a.hoursPerWeek}h/wk)</span>
+                                `).join('')}
+                        </div>
+                    </div>
+
+                    <!-- Actions -->
+                    <div class="flex space-x-2">
+                        <button onclick="openIssueModal(${issue.id})" class="px-3 py-1 bg-orange-600 text-white rounded hover:bg-orange-700 text-sm">Edit Issue</button>
+                        <button onclick="openIssueAssignmentModal(${issue.id})" class="px-3 py-1 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm">Manage Team</button>
+                    </div>
+                </div>
+            ` : ''}
+        </div>
+    `;
+}
+
+function toggleIssue(id) {
+    if (expandedIssues.has(id)) {
+        expandedIssues.delete(id);
+    } else {
+        expandedIssues.add(id);
+    }
+    renderIssues();
+}
+
+// ============================================================================
+// Plant Issue Modal Functions
+// ============================================================================
+
+function openIssueModal(id = null) {
+    currentIssue = id ? plantIssues.find(i => i.id === id) : null;
+
+    document.getElementById('modal-issue-title').textContent = currentIssue ? 'Edit Issue' : 'Report Issue';
+    document.getElementById('issue-id').value = currentIssue?.id || '';
+    document.getElementById('issue-title').value = currentIssue?.title || '';
+    document.getElementById('issue-description').value = currentIssue?.description || '';
+    document.getElementById('issue-location').value = currentIssue?.location || '';
+    document.getElementById('issue-category').value = currentIssue?.category || '';
+    document.getElementById('issue-severity').value = currentIssue?.severity || 'Medium';
+    document.getElementById('issue-status').value = currentIssue?.status || 'Open';
+    document.getElementById('issue-start-date').value = currentIssue?.startDate || new Date().toISOString().split('T')[0];
+    document.getElementById('issue-target-end-date').value = currentIssue?.targetEndDate || '';
+    document.getElementById('issue-actual-end-date').value = currentIssue?.actualEndDate || '';
+    document.getElementById('issue-progress').value = currentIssue?.progress || 0;
+    document.getElementById('issue-resolution-notes').value = currentIssue?.resolutionNotes || '';
+
+    document.getElementById('btn-delete-issue').classList.toggle('hidden', !currentIssue);
+
+    openModal('issue');
+}
+
+async function saveIssue(e) {
+    e.preventDefault();
+
+    const id = document.getElementById('issue-id').value;
+    const status = document.getElementById('issue-status').value;
+    let progress = parseInt(document.getElementById('issue-progress').value) || 0;
+
+    // Automatically set progress to 100% when closing an issue
+    if (status === 'Closed') {
+        progress = 100;
+    }
+
+    const data = {
+        title: document.getElementById('issue-title').value,
+        description: document.getElementById('issue-description').value,
+        location: document.getElementById('issue-location').value || null,
+        category: document.getElementById('issue-category').value || null,
+        severity: document.getElementById('issue-severity').value,
+        status: status,
+        startDate: document.getElementById('issue-start-date').value || null,
+        targetEndDate: document.getElementById('issue-target-end-date').value || null,
+        actualEndDate: document.getElementById('issue-actual-end-date').value || null,
+        progress: progress,
+        resolutionNotes: document.getElementById('issue-resolution-notes').value
+    };
+
+    try {
+        const url = id ? `${API}/api/plant-issues/${id}` : `${API}/api/plant-issues`;
+        const method = id ? 'PUT' : 'POST';
+
+        const response = await fetch(url, {
+            method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+
+        if (!response.ok) throw new Error('Failed to save issue');
+
+        await loadData();
+        closeModal('issue');
+        showToast(id ? 'Issue updated' : 'Issue created', 'success');
+    } catch (err) {
+        showToast('Failed to save issue', 'error');
+        console.error(err);
+    }
+}
+
+async function deleteIssue() {
+    if (!currentIssue) return;
+    if (!confirm('Are you sure you want to delete this issue?')) return;
+
+    try {
+        const response = await fetch(`${API}/api/plant-issues/${currentIssue.id}`, {
+            method: 'DELETE'
+        });
+
+        if (!response.ok) throw new Error('Failed to delete issue');
+
+        await loadData();
+        closeModal('issue');
+        showToast('Issue deleted', 'success');
+    } catch (err) {
+        showToast('Failed to delete issue', 'error');
+        console.error(err);
+    }
+}
+
+// ============================================================================
+// Plant Issue Assignment Modal Functions
+// ============================================================================
+
+function openIssueAssignmentModal(issueId) {
+    currentIssue = plantIssues.find(i => i.id === issueId);
+    if (!currentIssue) return;
+
+    document.getElementById('issue-assignment-id').value = issueId;
+    document.getElementById('issue-assignment-title').textContent = currentIssue.title;
+
+    // Populate engineer dropdown
+    const select = document.getElementById('new-issue-assignment-engineer');
+    const assignedIds = new Set((currentIssue.assignments || []).map(a => a.engineerId));
+    select.innerHTML = engineers
+        .filter(e => !assignedIds.has(e.id))
+        .map(e => `<option value="${e.id}">${e.name}</option>`)
+        .join('');
+
+    document.getElementById('new-issue-assignment-hours').value = '';
+
+    updateIssueAssignmentsDisplay();
+    openModal('issue-assignment');
+}
+
+function updateIssueAssignmentsDisplay() {
+    const list = document.getElementById('issue-assignments-list');
+    const assignments = currentIssue?.assignments || [];
+
+    if (assignments.length === 0) {
+        list.innerHTML = '<p class="text-gray-500 text-sm">No engineers assigned</p>';
+        return;
+    }
+
+    list.innerHTML = assignments.map(a => `
+        <div class="flex items-center justify-between p-2 bg-gray-100 rounded">
+            <div>
+                <span class="font-medium">${a.engineer}</span>
+                <span class="text-gray-600 text-sm ml-2">${a.hoursPerWeek}h/wk</span>
+            </div>
+            <button onclick="deleteIssueAssignment(${a.id})" class="text-red-600 hover:text-red-700">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                </svg>
+            </button>
+        </div>
+    `).join('');
+}
+
+async function addIssueAssignment() {
+    const issueId = document.getElementById('issue-assignment-id').value;
+    const engineerId = document.getElementById('new-issue-assignment-engineer').value;
+    const hours = parseInt(document.getElementById('new-issue-assignment-hours').value) || 0;
+
+    if (!engineerId) {
+        showToast('Please select an engineer', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API}/api/plant-issues/${issueId}/assignments`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ engineerId: parseInt(engineerId), hoursPerWeek: hours })
+        });
+
+        if (!response.ok) throw new Error('Failed to add assignment');
+
+        await loadData();
+        currentIssue = plantIssues.find(i => i.id === parseInt(issueId));
+
+        // Refresh the dropdown
+        const select = document.getElementById('new-issue-assignment-engineer');
+        const assignedIds = new Set((currentIssue.assignments || []).map(a => a.engineerId));
+        select.innerHTML = engineers
+            .filter(e => !assignedIds.has(e.id))
+            .map(e => `<option value="${e.id}">${e.name}</option>`)
+            .join('');
+
+        document.getElementById('new-issue-assignment-hours').value = '';
+        updateIssueAssignmentsDisplay();
+        showToast('Engineer assigned', 'success');
+    } catch (err) {
+        showToast('Failed to add assignment', 'error');
+        console.error(err);
+    }
+}
+
+async function deleteIssueAssignment(assignmentId) {
+    try {
+        const response = await fetch(`${API}/api/plant-issue-assignments/${assignmentId}`, {
+            method: 'DELETE'
+        });
+
+        if (!response.ok) throw new Error('Failed to remove assignment');
+
+        const issueId = document.getElementById('issue-assignment-id').value;
+        await loadData();
+        currentIssue = plantIssues.find(i => i.id === parseInt(issueId));
+
+        // Refresh the dropdown
+        const select = document.getElementById('new-issue-assignment-engineer');
+        const assignedIds = new Set((currentIssue.assignments || []).map(a => a.engineerId));
+        select.innerHTML = engineers
+            .filter(e => !assignedIds.has(e.id))
+            .map(e => `<option value="${e.id}">${e.name}</option>`)
+            .join('');
+
+        updateIssueAssignmentsDisplay();
+        showToast('Assignment removed', 'success');
+    } catch (err) {
+        showToast('Failed to remove assignment', 'error');
+        console.error(err);
     }
 }

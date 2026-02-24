@@ -307,7 +307,7 @@ class MaintenanceMessage(db.Model):
     created_by = db.Column(db.String(100))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     active = db.Column(db.Boolean, default=True)
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -315,6 +315,97 @@ class MaintenanceMessage(db.Model):
             'createdBy': self.created_by,
             'createdAt': self.created_at.isoformat() if self.created_at else None,
             'active': self.active
+        }
+
+
+class PlantIssue(db.Model):
+    """Track plant-specific operational issues (not projects)"""
+    __tablename__ = 'plant_issues'
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text)
+    location = db.Column(db.String(50))  # Module Line, Pack Line, Line Agnostic
+    severity = db.Column(db.String(20), default='Medium')  # Critical, High, Medium, Low
+    status = db.Column(db.String(20), default='Open')  # Open, In Progress, Resolved, Closed
+    category = db.Column(db.String(50))  # Equipment, Quality, Process, Safety, Other
+    start_date = db.Column(db.Date)
+    target_end_date = db.Column(db.Date)
+    actual_end_date = db.Column(db.Date)
+    progress = db.Column(db.Integer, default=0)
+    resolution_notes = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_by = db.Column(db.String(100))
+
+    # Relationships
+    assignments = db.relationship('PlantIssueAssignment', backref=db.backref('issue', lazy=True),
+                                  cascade='all, delete-orphan', lazy=True)
+    change_history = db.relationship('PlantIssueChangeHistory', backref='issue',
+                                     cascade='all, delete-orphan', lazy=True)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'title': self.title,
+            'description': self.description,
+            'location': self.location,
+            'severity': self.severity,
+            'status': self.status,
+            'category': self.category,
+            'startDate': self.start_date.isoformat() if self.start_date else None,
+            'targetEndDate': self.target_end_date.isoformat() if self.target_end_date else None,
+            'actualEndDate': self.actual_end_date.isoformat() if self.actual_end_date else None,
+            'progress': self.progress,
+            'resolutionNotes': self.resolution_notes,
+            'createdAt': self.created_at.isoformat() if self.created_at else None,
+            'createdBy': self.created_by,
+            'assignments': [a.to_dict() for a in self.assignments],
+            'changeHistory': [ch.to_dict() for ch in self.change_history]
+        }
+
+
+class PlantIssueAssignment(db.Model):
+    """Junction table for engineer assignments to plant issues"""
+    __tablename__ = 'plant_issue_assignments'
+    id = db.Column(db.Integer, primary_key=True)
+    issue_id = db.Column(db.Integer, db.ForeignKey('plant_issues.id'), nullable=False)
+    engineer_id = db.Column(db.Integer, db.ForeignKey('engineers.id'), nullable=False)
+    hours_per_week = db.Column(db.Integer, nullable=False)
+
+    __table_args__ = (db.UniqueConstraint('issue_id', 'engineer_id'),)
+
+    # Relationships
+    engineer = db.relationship('Engineer', backref=db.backref('issue_assignments',
+                               cascade='all, delete-orphan', lazy=True))
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'issueId': self.issue_id,
+            'engineerId': self.engineer_id,
+            'engineer': self.engineer.name if self.engineer else None,
+            'hoursPerWeek': self.hours_per_week
+        }
+
+
+class PlantIssueChangeHistory(db.Model):
+    """Audit trail for plant issue changes"""
+    __tablename__ = 'plant_issue_change_history'
+    id = db.Column(db.Integer, primary_key=True)
+    issue_id = db.Column(db.Integer, db.ForeignKey('plant_issues.id'), nullable=False)
+    field = db.Column(db.String(100), nullable=False)
+    old_value = db.Column(db.String(500))
+    new_value = db.Column(db.String(500))
+    changed_at = db.Column(db.DateTime, default=datetime.utcnow)
+    changed_by = db.Column(db.String(100))
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'field': self.field,
+            'oldValue': self.old_value,
+            'newValue': self.new_value,
+            'changedAt': self.changed_at.isoformat() if self.changed_at else None,
+            'changedBy': self.changed_by
         }
 
 
@@ -485,7 +576,10 @@ def _build_table_map():
         'tasks': Task,
         'change_history': ChangeHistory,
         'project_jira_issues': ProjectJiraIssue,
-        'maintenance_messages': MaintenanceMessage
+        'maintenance_messages': MaintenanceMessage,
+        'plant_issues': PlantIssue,
+        'plant_issue_assignments': PlantIssueAssignment,
+        'plant_issue_change_history': PlantIssueChangeHistory
     }
 
 
@@ -1237,6 +1331,197 @@ def update_task(id):
 def delete_task(id):
     task = Task.query.get_or_404(id)
     db.session.delete(task)
+    db.session.commit()
+    return '', 204
+
+
+# ============================================================================
+# API Routes - Plant Issues
+# ============================================================================
+
+@app.route('/api/plant-issues', methods=['GET'])
+def get_plant_issues():
+    """Get all plant issues"""
+    issues = PlantIssue.query.all()
+    return jsonify([i.to_dict() for i in issues])
+
+
+@app.route('/api/plant-issues/<int:id>', methods=['GET'])
+def get_plant_issue(id):
+    """Get a specific plant issue"""
+    issue = PlantIssue.query.get_or_404(id)
+    return jsonify(issue.to_dict())
+
+
+@app.route('/api/plant-issues', methods=['POST'])
+def create_plant_issue():
+    """Create a new plant issue"""
+    data = request.get_json()
+
+    issue = PlantIssue(
+        title=data['title'],
+        description=data.get('description', ''),
+        location=data.get('location'),
+        severity=data.get('severity', 'Medium'),
+        status=data.get('status', 'Open'),
+        category=data.get('category'),
+        start_date=datetime.strptime(data['startDate'], '%Y-%m-%d').date() if data.get('startDate') else None,
+        target_end_date=datetime.strptime(data['targetEndDate'], '%Y-%m-%d').date() if data.get('targetEndDate') else None,
+        actual_end_date=datetime.strptime(data['actualEndDate'], '%Y-%m-%d').date() if data.get('actualEndDate') else None,
+        progress=data.get('progress', 0),
+        resolution_notes=data.get('resolutionNotes', ''),
+        created_by=session.get('username', 'System')
+    )
+    db.session.add(issue)
+    db.session.commit()
+    return jsonify(issue.to_dict()), 201
+
+
+@app.route('/api/plant-issues/<int:id>', methods=['PUT'])
+def update_plant_issue(id):
+    """Update an existing plant issue"""
+    issue = PlantIssue.query.get_or_404(id)
+    data = request.get_json()
+
+    # Track changes for history
+    changes = []
+    changed_by = session.get('username', 'System')
+
+    if 'title' in data and data['title'] != issue.title:
+        changes.append(('Title', issue.title, data['title']))
+        issue.title = data['title']
+
+    if 'description' in data:
+        issue.description = data['description']
+
+    if 'location' in data and data['location'] != issue.location:
+        changes.append(('Location', issue.location, data['location']))
+        issue.location = data['location']
+
+    if 'severity' in data and data['severity'] != issue.severity:
+        changes.append(('Severity', issue.severity, data['severity']))
+        issue.severity = data['severity']
+
+    if 'status' in data and data['status'] != issue.status:
+        changes.append(('Status', issue.status, data['status']))
+        issue.status = data['status']
+        # Auto-set actual_end_date when status becomes Resolved or Closed
+        if data['status'] in ['Resolved', 'Closed'] and not issue.actual_end_date:
+            issue.actual_end_date = date.today()
+
+    if 'category' in data:
+        issue.category = data['category']
+
+    if 'startDate' in data:
+        old_date = issue.start_date.isoformat() if issue.start_date else None
+        new_date = data['startDate']
+        if old_date != new_date:
+            changes.append(('Start Date', old_date, new_date))
+        issue.start_date = datetime.strptime(new_date, '%Y-%m-%d').date() if new_date else None
+
+    if 'targetEndDate' in data:
+        old_date = issue.target_end_date.isoformat() if issue.target_end_date else None
+        new_date = data['targetEndDate']
+        if old_date != new_date:
+            changes.append(('Target End Date', old_date, new_date))
+        issue.target_end_date = datetime.strptime(new_date, '%Y-%m-%d').date() if new_date else None
+
+    if 'actualEndDate' in data:
+        issue.actual_end_date = datetime.strptime(data['actualEndDate'], '%Y-%m-%d').date() if data['actualEndDate'] else None
+
+    if 'progress' in data:
+        if data['progress'] != issue.progress:
+            changes.append(('Progress', str(issue.progress), str(data['progress'])))
+        issue.progress = data['progress']
+
+    if 'resolutionNotes' in data:
+        issue.resolution_notes = data['resolutionNotes']
+
+    # Record changes
+    for field, old_val, new_val in changes:
+        ch = PlantIssueChangeHistory(
+            issue_id=issue.id,
+            field=field,
+            old_value=str(old_val) if old_val else '',
+            new_value=str(new_val) if new_val else '',
+            changed_by=changed_by
+        )
+        db.session.add(ch)
+
+    db.session.commit()
+    return jsonify(issue.to_dict())
+
+
+@app.route('/api/plant-issues/<int:id>', methods=['DELETE'])
+def delete_plant_issue(id):
+    """Delete a plant issue"""
+    issue = PlantIssue.query.get_or_404(id)
+    db.session.delete(issue)
+    db.session.commit()
+    return '', 204
+
+
+# ============================================================================
+# API Routes - Plant Issue Assignments
+# ============================================================================
+
+@app.route('/api/plant-issues/<int:issue_id>/assignments', methods=['GET'])
+def get_plant_issue_assignments(issue_id):
+    """Get all engineer assignments for an issue"""
+    issue = PlantIssue.query.get_or_404(issue_id)
+    return jsonify([a.to_dict() for a in issue.assignments])
+
+
+@app.route('/api/plant-issues/<int:issue_id>/assignments', methods=['POST'])
+def add_plant_issue_assignment(issue_id):
+    """Assign an engineer to a plant issue"""
+    issue = PlantIssue.query.get_or_404(issue_id)
+    data = request.get_json()
+
+    engineer_id = data.get('engineerId')
+    if not engineer_id:
+        return jsonify({'error': 'engineerId is required'}), 400
+
+    engineer = Engineer.query.get(engineer_id)
+    if not engineer:
+        return jsonify({'error': 'Engineer not found'}), 404
+
+    # Check for existing assignment
+    existing = PlantIssueAssignment.query.filter_by(
+        issue_id=issue_id,
+        engineer_id=engineer_id
+    ).first()
+    if existing:
+        return jsonify({'error': 'Engineer already assigned to this issue'}), 400
+
+    assignment = PlantIssueAssignment(
+        issue_id=issue_id,
+        engineer_id=engineer_id,
+        hours_per_week=data.get('hoursPerWeek', 0)
+    )
+    db.session.add(assignment)
+    db.session.commit()
+    return jsonify(assignment.to_dict()), 201
+
+
+@app.route('/api/plant-issue-assignments/<int:id>', methods=['PUT'])
+def update_plant_issue_assignment(id):
+    """Update an existing plant issue assignment"""
+    assignment = PlantIssueAssignment.query.get_or_404(id)
+    data = request.get_json()
+
+    if 'hoursPerWeek' in data:
+        assignment.hours_per_week = data['hoursPerWeek']
+
+    db.session.commit()
+    return jsonify(assignment.to_dict())
+
+
+@app.route('/api/plant-issue-assignments/<int:id>', methods=['DELETE'])
+def delete_plant_issue_assignment(id):
+    """Remove an engineer assignment from an issue"""
+    assignment = PlantIssueAssignment.query.get_or_404(id)
+    db.session.delete(assignment)
     db.session.commit()
     return '', 204
 
