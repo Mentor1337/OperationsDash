@@ -718,9 +718,12 @@ async function removeJiraIssueFromProject(jiraKey) {
     if (!confirm(`Remove ${jiraKey} from this project?`)) return;
     
     try {
-        await fetch(`${API}/api/projects/${projectId}/jira/${jiraKey}`, {
+        const response = await fetch(`${API}/api/projects/${projectId}/jira/${jiraKey}`, {
             method: 'DELETE'
         });
+        
+        if (await handleApiError(response)) return;
+        if (!response.ok) throw new Error('Failed to remove Jira issue');
         
         await loadProjectJiraIssues(projectId); // Reload the list
         await loadData(); // Refresh main project data
@@ -795,7 +798,9 @@ async function addExpense() {
     }
     
     try {
-        await fetch(`${API}/api/projects/${projectId}/expenses`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
+        const response = await fetch(`${API}/api/projects/${projectId}/expenses`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
+        if (await handleApiError(response)) return;
+        if (!response.ok) throw new Error('Failed to add expense');
         await loadData();
         currentProject = projects.find(p => p.id == projectId);
         updateExpenseDisplay();
@@ -811,7 +816,9 @@ async function deleteExpense(id) {
     if (!confirm('Delete this expense?')) return;
     const projectId = document.getElementById('expense-project-id').value;
     try {
-        await fetch(`${API}/api/expenses/${id}`, { method: 'DELETE' });
+        const response = await fetch(`${API}/api/expenses/${id}`, { method: 'DELETE' });
+        if (await handleApiError(response)) return;
+        if (!response.ok) throw new Error('Failed to delete expense');
         await loadData();
         currentProject = projects.find(p => p.id == projectId);
         updateExpenseDisplay();
@@ -944,7 +951,9 @@ async function addMilestone() {
     }
     
     try {
-        await fetch(`${API}/api/projects/${projectId}/milestones`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
+        const response = await fetch(`${API}/api/projects/${projectId}/milestones`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
+        if (await handleApiError(response)) return;
+        if (!response.ok) throw new Error('Failed to add milestone');
         await loadData();
         currentProject = projects.find(p => p.id == projectId);
         updateMilestoneDisplay();
@@ -963,7 +972,9 @@ async function updateMilestoneStatus(id, status) {
     if (status === 'completed') data.actualDate = new Date().toISOString().split('T')[0];
     
     try {
-        await fetch(`${API}/api/milestones/${id}`, { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
+        const response = await fetch(`${API}/api/milestones/${id}`, { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
+        if (await handleApiError(response)) return;
+        if (!response.ok) throw new Error('Failed to update milestone');
         await loadData();
         currentProject = projects.find(p => p.id == projectId);
         updateMilestoneDisplay();
@@ -977,7 +988,9 @@ async function deleteMilestone(id) {
     if (!confirm('Delete this milestone?')) return;
     const projectId = document.getElementById('milestone-project-id').value;
     try {
-        await fetch(`${API}/api/milestones/${id}`, { method: 'DELETE' });
+        const response = await fetch(`${API}/api/milestones/${id}`, { method: 'DELETE' });
+        if (await handleApiError(response)) return;
+        if (!response.ok) throw new Error('Failed to delete milestone');
         await loadData();
         currentProject = projects.find(p => p.id == projectId);
         editingMilestoneId = null;
@@ -1017,12 +1030,14 @@ async function saveMilestoneEdit(id) {
     };
     
     try {
-        await fetch(`${API}/api/milestones/${id}`, {
+        const response = await fetch(`${API}/api/milestones/${id}`, {
             method: 'PUT',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(data)
         });
         
+        if (await handleApiError(response)) return;
+        if (!response.ok) throw new Error('Failed to update milestone');
         await loadData();
         currentProject = projects.find(p => p.id == projectId);
         editingMilestoneId = null;
@@ -1156,7 +1171,9 @@ async function removeMilestoneAssignment(assignmentId) {
     const milestoneId = document.getElementById('milestone-assignment-id').value;
 
     try {
-        await fetch(`${API}/api/milestone-assignments/${assignmentId}`, { method: 'DELETE' });
+        const response = await fetch(`${API}/api/milestone-assignments/${assignmentId}`, { method: 'DELETE' });
+        if (await handleApiError(response)) return;
+        if (!response.ok) throw new Error('Failed to remove assignment');
         await loadData();
 
         // Refresh the milestone data
@@ -1249,11 +1266,13 @@ async function updateTaskHours(taskId) {
     }
     
     try {
-        await fetch(`${API}/api/tasks/${taskId}`, { 
+        const response = await fetch(`${API}/api/tasks/${taskId}`, { 
             method: 'PUT', 
             headers: {'Content-Type': 'application/json'}, 
             body: JSON.stringify({ hoursPerWeek: newHours }) 
         });
+        if (await handleApiError(response)) return;
+        if (!response.ok) throw new Error('Failed to update hours');
         await loadData();
         currentProject = projects.find(p => p.id == projectId);
         updateTaskDisplay();
@@ -1276,7 +1295,9 @@ async function addTask() {
     }
     
     try {
-        await fetch(`${API}/api/projects/${projectId}/tasks`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
+        const response = await fetch(`${API}/api/projects/${projectId}/tasks`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
+        if (await handleApiError(response)) return;
+        if (!response.ok) throw new Error('Failed to add assignment');
         await loadData();
         currentProject = projects.find(p => p.id == projectId);
         updateTaskDisplay();
@@ -1291,7 +1312,9 @@ async function deleteTask(id) {
     if (!confirm('Remove this assignment?')) return;
     const projectId = document.getElementById('task-project-id').value;
     try {
-        await fetch(`${API}/api/tasks/${id}`, { method: 'DELETE' });
+        const response = await fetch(`${API}/api/tasks/${id}`, { method: 'DELETE' });
+        if (await handleApiError(response)) return;
+        if (!response.ok) throw new Error('Failed to remove assignment');
         await loadData();
         currentProject = projects.find(p => p.id == projectId);
         updateTaskDisplay();
@@ -4121,6 +4144,7 @@ async function addIssueAssignment() {
             body: JSON.stringify({ engineerId: parseInt(engineerId), hoursPerWeek: hours })
         });
 
+        if (await handleApiError(response)) return;
         if (!response.ok) throw new Error('Failed to add assignment');
 
         await loadData();
@@ -4149,6 +4173,7 @@ async function deleteIssueAssignment(assignmentId) {
             method: 'DELETE'
         });
 
+        if (await handleApiError(response)) return;
         if (!response.ok) throw new Error('Failed to remove assignment');
 
         const issueId = document.getElementById('issue-assignment-id').value;
