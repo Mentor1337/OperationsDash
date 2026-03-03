@@ -1362,6 +1362,7 @@ function renderRoadmap() {
                     <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleLocationFilter(this.value); renderRoadmap();">
                         <option value="all" ${locationFilter === 'all' ? 'selected' : ''}>All Locations</option>
                         ${locations.map(loc => `<option value="${loc}" ${locationFilter === loc ? 'selected' : ''}>${loc}</option>`).join('')}
+                        ${locations.map(loc => `<option value="not:${loc}" ${locationFilter === 'not:' + loc ? 'selected' : ''}>Not ${loc}</option>`).join('')}
                     </select>
                 </div>
                 <div>
@@ -1369,6 +1370,7 @@ function renderRoadmap() {
                     <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleOwnerFilter(this.value); renderRoadmap();">
                         <option value="all" ${ownerFilter === 'all' ? 'selected' : ''}>All Owners</option>
                         ${uniqueOwners.map(owner => `<option value="${owner}" ${ownerFilter === owner ? 'selected' : ''}>${owner}</option>`).join('')}
+                        ${uniqueOwners.map(owner => `<option value="not:${owner}" ${ownerFilter === 'not:' + owner ? 'selected' : ''}>Not ${owner}</option>`).join('')}
                     </select>
                 </div>
                 <div>
@@ -1376,6 +1378,7 @@ function renderRoadmap() {
                     <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handlePriorityFilter(this.value); renderRoadmap();">
                         <option value="all" ${priorityFilter === 'all' ? 'selected' : ''}>All Priorities</option>
                         ${priorities.map(p => `<option value="${p}" ${priorityFilter === p ? 'selected' : ''}>${p}</option>`).join('')}
+                        ${priorities.map(p => `<option value="not:${p}" ${priorityFilter === 'not:' + p ? 'selected' : ''}>Not ${p}</option>`).join('')}
                     </select>
                 </div>
                 <div>
@@ -1383,6 +1386,7 @@ function renderRoadmap() {
                     <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleStatusFilter(this.value); renderRoadmap();">
                         <option value="all" ${statusFilter === 'all' ? 'selected' : ''}>All Statuses</option>
                         ${statuses.map(s => `<option value="${s}" ${statusFilter === s ? 'selected' : ''}>${s}</option>`).join('')}
+                        ${statuses.map(s => `<option value="not:${s}" ${statusFilter === 'not:' + s ? 'selected' : ''}>Not ${s}</option>`).join('')}
                     </select>
                 </div>
             </div>
@@ -2193,10 +2197,18 @@ let individualTrendsChartInstance = null;
 // Helper function to calculate milestone hours for an engineer in a given date range
 function getMilestoneHoursForEngineer(engineerName, startDate, endDate) {
     let totalMilestoneHours = 0;
+    // Track which projects have already contributed milestone hours to avoid double-counting
+    const projectMilestonesCounted = new Set();
 
     projects.forEach(project => {
+        // Skip if this project already has a milestone counted for this date range
+        if (projectMilestonesCounted.has(project.id)) return;
+
         // Check milestones with assignments that overlap the date range
         project.milestones.forEach(milestone => {
+            // Skip if this project already has a milestone counted
+            if (projectMilestonesCounted.has(project.id)) return;
+
             // Skip milestones without date ranges
             if (!milestone.startDate || !milestone.endDate) return;
 
@@ -2211,6 +2223,8 @@ function getMilestoneHoursForEngineer(engineerName, startDate, endDate) {
 
                 if (assignment) {
                     totalMilestoneHours += assignment.hoursPerWeek;
+                    // Mark this project as having contributed milestone hours
+                    projectMilestonesCounted.add(project.id);
                 }
             }
         });
@@ -2593,9 +2607,17 @@ function renderIndividualTrendsChart() {
                 }, 0);
 
             // Add milestone hours for this week and track contributing projects
+            // Track which projects have already contributed milestone hours this week to avoid double-counting
             let milestoneHours = 0;
+            const projectMilestonesCounted = new Set();
             projects.forEach(project => {
+                // Skip if this project already has a milestone counted for this week
+                if (projectMilestonesCounted.has(project.id)) return;
+
                 project.milestones.forEach(milestone => {
+                    // Skip if this project already has a milestone counted for this week
+                    if (projectMilestonesCounted.has(project.id)) return;
+
                     if (!milestone.startDate || !milestone.endDate) return;
                     const mStart = new Date(milestone.startDate);
                     const mEnd = new Date(milestone.endDate);
@@ -2610,6 +2632,8 @@ function renderIndividualTrendsChart() {
                                 hours: assignment.hoursPerWeek,
                                 type: 'milestone'
                             });
+                            // Mark this project as having contributed milestone hours for this week
+                            projectMilestonesCounted.add(project.id);
                         }
                     }
                 });
