@@ -128,7 +128,7 @@ function renderCurrentTab() {
 
 function renderProjects() {
     const container = document.getElementById('content-projects');
-    const uniqueOwners = [...new Set(projects.map(p => p.owner).filter(Boolean))];
+    const uniqueOwners = engineers.map(e => e.name).filter(Boolean);
     const locations = ['Module Line', 'Pack Line', 'Line Agnostic'];
     const priorities = ['Critical', 'High', 'Medium', 'Low'];
     const statuses = ['On Track', 'At Risk', 'Behind', 'Planned', 'Completed', 'Cancelled'];
