@@ -295,6 +295,7 @@ function createProjectCard(p) {
     const statusClass = getStatusClass(p.status);
     const budgetPct = p.budget > 0 ? Math.round((p.spent / p.budget) * 100) : 0;
     const isExpanded = expandedProjects.has(p.id);
+    const isStalePlanned = p.status === 'Planned' && new Date(p.startDate) < new Date();
     const chevronIcon = isExpanded 
         ? `<svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>`
         : `<svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>`;
@@ -336,6 +337,7 @@ function createProjectCard(p) {
                             <div class="flex items-center space-x-3">
                                 <h3 class="text-lg font-semibold text-gray-800">${p.name}</h3>
                                 <span class="px-3 py-1 rounded-full text-xs font-medium border ${statusClass}">${p.status}</span>
+                                ${isStalePlanned ? `<span class="px-2 py-1 rounded text-xs font-medium bg-orange-100 text-orange-700 border border-orange-300" title="Start date has passed">⚠ Overdue Start</span>` : ''}
                                 ${p.jiraKeys && p.jiraKeys.length > 0 ? p.jiraKeys.map(key => 
                                     `<button onclick="event.stopPropagation(); openJiraModal('${key}', '${p.name}')" class="px-2 py-1 bg-blue-50 text-blue-700 text-xs rounded border border-blue-200 hover:bg-blue-100 font-mono">${key}</button>`
                                 ).join(' ') : ''}
@@ -2201,6 +2203,8 @@ function getMilestoneHoursForEngineer(engineerName, startDate, endDate) {
     const projectMilestonesCounted = new Set();
 
     projects.forEach(project => {
+        // Skip completed/cancelled projects
+        if (['Completed', 'Cancelled'].includes(project.status)) return;
         // Skip if this project already has a milestone counted for this date range
         if (projectMilestonesCounted.has(project.id)) return;
 
@@ -2591,6 +2595,7 @@ function renderIndividualTrendsChart() {
             const contributingProjects = [];
 
             const projectHours = projects
+                .filter(p => !['Completed', 'Cancelled'].includes(p.status))
                 .filter(p => {
                     const pStart = new Date(p.startDate);
                     const pEnd = new Date(p.endDate);
@@ -2611,6 +2616,8 @@ function renderIndividualTrendsChart() {
             let milestoneHours = 0;
             const projectMilestonesCounted = new Set();
             projects.forEach(project => {
+                // Skip completed/cancelled projects
+                if (['Completed', 'Cancelled'].includes(project.status)) return;
                 // Skip if this project already has a milestone counted for this week
                 if (projectMilestonesCounted.has(project.id)) return;
 
@@ -2812,6 +2819,7 @@ function renderMonthlyBreakdownTable() {
             
             const nonProject = eng.nonProjectTime.reduce((sum, item) => sum + item.hours, 0);
             const projectHours = projects
+                .filter(p => !['Completed', 'Cancelled'].includes(p.status))
                 .filter(p => {
                     const pStart = new Date(p.startDate);
                     const pEnd = new Date(p.endDate);
@@ -2871,6 +2879,7 @@ function renderMonthlyBreakdownTable() {
         engineers.forEach(eng => {
             const nonProject = eng.nonProjectTime.reduce((sum, item) => sum + item.hours, 0);
             const projectHours = projects
+                .filter(p => !['Completed', 'Cancelled'].includes(p.status))
                 .filter(p => {
                     const pStart = new Date(p.startDate);
                     const pEnd = new Date(p.endDate);
