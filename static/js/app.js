@@ -496,6 +496,10 @@ function openProjectModal(id = null) {
         // Clear Jira issues list for new project
         document.getElementById('project-jira-list').innerHTML = '';
         tempYearlyBudgets = [];
+        // Pre-select current engineer as owner (backend will enforce this anyway)
+        if (!authState.isAdmin && authState.engineerId) {
+            document.getElementById('project-owner').value = authState.engineerId;
+        }
     }
 
     updateYearlyBudgetUI();
@@ -1342,10 +1346,10 @@ function renderRoadmap() {
     container.innerHTML = `
         <div class="flex justify-between items-center mb-4">
             <h2 class="text-2xl font-bold text-gray-800">Project Roadmap</h2>
-            <button onclick="openProjectModal()" class="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+            ${canCreateProject() ? `<button onclick="openProjectModal()" class="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
                 <span>Add Planned Project</span>
-            </button>
+            </button>` : ''}
         </div>
 
         <!-- Filters -->
