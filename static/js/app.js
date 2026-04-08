@@ -128,7 +128,7 @@ function renderCurrentTab() {
 
 function renderProjects() {
     const container = document.getElementById('content-projects');
-    const uniqueOwners = [...new Set(projects.map(p => p.owner).filter(Boolean))];
+    const uniqueOwners = engineers.map(e => e.name).filter(Boolean);
     const locations = ['Module Line', 'Pack Line', 'Line Agnostic'];
     const priorities = ['Critical', 'High', 'Medium', 'Low'];
     const statuses = ['On Track', 'At Risk', 'Behind', 'Planned', 'Completed', 'Cancelled'];
@@ -295,6 +295,7 @@ function createProjectCard(p) {
     const statusClass = getStatusClass(p.status);
     const budgetPct = p.budget > 0 ? Math.round((p.spent / p.budget) * 100) : 0;
     const isExpanded = expandedProjects.has(p.id);
+    const isStalePlanned = p.status === 'Planned' && new Date(p.startDate) < new Date();
     const chevronIcon = isExpanded 
         ? `<svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>`
         : `<svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>`;
@@ -336,6 +337,7 @@ function createProjectCard(p) {
                             <div class="flex items-center space-x-3">
                                 <h3 class="text-lg font-semibold text-gray-800">${p.name}</h3>
                                 <span class="px-3 py-1 rounded-full text-xs font-medium border ${statusClass}">${p.status}</span>
+                                ${isStalePlanned ? `<span class="px-2 py-1 rounded text-xs font-medium bg-orange-100 text-orange-700 border border-orange-300" title="Start date has passed">⚠ Overdue Start</span>` : ''}
                                 ${p.jiraKeys && p.jiraKeys.length > 0 ? p.jiraKeys.map(key => 
                                     `<button onclick="event.stopPropagation(); openJiraModal('${key}', '${p.name}')" class="px-2 py-1 bg-blue-50 text-blue-700 text-xs rounded border border-blue-200 hover:bg-blue-100 font-mono">${key}</button>`
                                 ).join(' ') : ''}
@@ -1366,6 +1368,7 @@ function renderRoadmap() {
                     <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleLocationFilter(this.value); renderRoadmap();">
                         <option value="all" ${locationFilter === 'all' ? 'selected' : ''}>All Locations</option>
                         ${locations.map(loc => `<option value="${loc}" ${locationFilter === loc ? 'selected' : ''}>${loc}</option>`).join('')}
+                        ${locations.map(loc => `<option value="not:${loc}" ${locationFilter === 'not:' + loc ? 'selected' : ''}>Not ${loc}</option>`).join('')}
                     </select>
                 </div>
                 <div>
@@ -1373,6 +1376,7 @@ function renderRoadmap() {
                     <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleOwnerFilter(this.value); renderRoadmap();">
                         <option value="all" ${ownerFilter === 'all' ? 'selected' : ''}>All Owners</option>
                         ${uniqueOwners.map(owner => `<option value="${owner}" ${ownerFilter === owner ? 'selected' : ''}>${owner}</option>`).join('')}
+                        ${uniqueOwners.map(owner => `<option value="not:${owner}" ${ownerFilter === 'not:' + owner ? 'selected' : ''}>Not ${owner}</option>`).join('')}
                     </select>
                 </div>
                 <div>
@@ -1380,6 +1384,7 @@ function renderRoadmap() {
                     <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handlePriorityFilter(this.value); renderRoadmap();">
                         <option value="all" ${priorityFilter === 'all' ? 'selected' : ''}>All Priorities</option>
                         ${priorities.map(p => `<option value="${p}" ${priorityFilter === p ? 'selected' : ''}>${p}</option>`).join('')}
+                        ${priorities.map(p => `<option value="not:${p}" ${priorityFilter === 'not:' + p ? 'selected' : ''}>Not ${p}</option>`).join('')}
                     </select>
                 </div>
                 <div>
@@ -1387,6 +1392,7 @@ function renderRoadmap() {
                     <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleStatusFilter(this.value); renderRoadmap();">
                         <option value="all" ${statusFilter === 'all' ? 'selected' : ''}>All Statuses</option>
                         ${statuses.map(s => `<option value="${s}" ${statusFilter === s ? 'selected' : ''}>${s}</option>`).join('')}
+                        ${statuses.map(s => `<option value="not:${s}" ${statusFilter === 'not:' + s ? 'selected' : ''}>Not ${s}</option>`).join('')}
                     </select>
                 </div>
             </div>
@@ -2197,10 +2203,20 @@ let individualTrendsChartInstance = null;
 // Helper function to calculate milestone hours for an engineer in a given date range
 function getMilestoneHoursForEngineer(engineerName, startDate, endDate) {
     let totalMilestoneHours = 0;
+    // Track which projects have already contributed milestone hours to avoid double-counting
+    const projectMilestonesCounted = new Set();
 
     projects.forEach(project => {
+        // Skip completed/cancelled projects
+        if (['Completed', 'Cancelled'].includes(project.status)) return;
+        // Skip if this project already has a milestone counted for this date range
+        if (projectMilestonesCounted.has(project.id)) return;
+
         // Check milestones with assignments that overlap the date range
         project.milestones.forEach(milestone => {
+            // Skip if this project already has a milestone counted
+            if (projectMilestonesCounted.has(project.id)) return;
+
             // Skip milestones without date ranges
             if (!milestone.startDate || !milestone.endDate) return;
 
@@ -2215,6 +2231,8 @@ function getMilestoneHoursForEngineer(engineerName, startDate, endDate) {
 
                 if (assignment) {
                     totalMilestoneHours += assignment.hoursPerWeek;
+                    // Mark this project as having contributed milestone hours
+                    projectMilestonesCounted.add(project.id);
                 }
             }
         });
@@ -2581,6 +2599,7 @@ function renderIndividualTrendsChart() {
             const contributingProjects = [];
 
             const projectHours = projects
+                .filter(p => !['Completed', 'Cancelled'].includes(p.status))
                 .filter(p => {
                     const pStart = new Date(p.startDate);
                     const pEnd = new Date(p.endDate);
@@ -2597,9 +2616,19 @@ function renderIndividualTrendsChart() {
                 }, 0);
 
             // Add milestone hours for this week and track contributing projects
+            // Track which projects have already contributed milestone hours this week to avoid double-counting
             let milestoneHours = 0;
+            const projectMilestonesCounted = new Set();
             projects.forEach(project => {
+                // Skip completed/cancelled projects
+                if (['Completed', 'Cancelled'].includes(project.status)) return;
+                // Skip if this project already has a milestone counted for this week
+                if (projectMilestonesCounted.has(project.id)) return;
+
                 project.milestones.forEach(milestone => {
+                    // Skip if this project already has a milestone counted for this week
+                    if (projectMilestonesCounted.has(project.id)) return;
+
                     if (!milestone.startDate || !milestone.endDate) return;
                     const mStart = new Date(milestone.startDate);
                     const mEnd = new Date(milestone.endDate);
@@ -2614,6 +2643,8 @@ function renderIndividualTrendsChart() {
                                 hours: assignment.hoursPerWeek,
                                 type: 'milestone'
                             });
+                            // Mark this project as having contributed milestone hours for this week
+                            projectMilestonesCounted.add(project.id);
                         }
                     }
                 });
@@ -2792,6 +2823,7 @@ function renderMonthlyBreakdownTable() {
             
             const nonProject = eng.nonProjectTime.reduce((sum, item) => sum + item.hours, 0);
             const projectHours = projects
+                .filter(p => !['Completed', 'Cancelled'].includes(p.status))
                 .filter(p => {
                     const pStart = new Date(p.startDate);
                     const pEnd = new Date(p.endDate);
@@ -2851,6 +2883,7 @@ function renderMonthlyBreakdownTable() {
         engineers.forEach(eng => {
             const nonProject = eng.nonProjectTime.reduce((sum, item) => sum + item.hours, 0);
             const projectHours = projects
+                .filter(p => !['Completed', 'Cancelled'].includes(p.status))
                 .filter(p => {
                     const pStart = new Date(p.startDate);
                     const pEnd = new Date(p.endDate);
