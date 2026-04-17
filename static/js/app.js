@@ -1591,16 +1591,58 @@ function renderGanttChart() {
         }
     }
 
+    // Custom plugin to draw "today" line
+    const todayLinePlugin = {
+        id: 'todayLine',
+        afterDraw: (chart) => {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+
+            // Check if today is within the visible range
+            const xScale = chart.scales.x;
+            if (today < xScale.min || today > xScale.max) return;
+
+            const xPosition = xScale.getPixelForValue(today);
+            const ctx = chart.ctx;
+            const chartArea = chart.chartArea;
+
+            ctx.save();
+
+            // Draw "Today" label above the chart area
+            ctx.fillStyle = '#000000';
+            ctx.font = 'bold 11px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('Today', xPosition, chartArea.top - 8);
+
+            // Draw dashed line starting at the top of the chart
+            ctx.beginPath();
+            ctx.setLineDash([5, 5]);
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 2;
+            ctx.moveTo(xPosition, chartArea.top);
+            ctx.lineTo(xPosition, chartArea.bottom);
+            ctx.stroke();
+
+            ctx.restore();
+        }
+    };
+
     ganttChartInstance = new Chart(ctx, {
         type: 'bar',
         data: {
             labels: projectLabels,
             datasets: datasets
         },
+        plugins: [todayLinePlugin],
         options: {
             indexAxis: 'y',
             responsive: true,
             maintainAspectRatio: false,
+            layout: {
+                padding: {
+                    top: 20
+                }
+            },
             scales: {
                 x: {
                     type: 'time',
