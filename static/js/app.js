@@ -3017,11 +3017,13 @@ async function saveEngineer(e) {
         const eng = engineers.find(e => e.id == engId);
         if (eng) {
             for (const npt of eng.nonProjectTime) {
-                await fetch(`${API}/api/engineers/${engId}/non-project-time/${npt.id}`, { method: 'DELETE' });
+                const delRes = await fetch(`${API}/api/engineers/${engId}/non-project-time/${npt.id}`, { method: 'DELETE' });
+                if (!delRes.ok) throw new Error('Failed to update non-project time');
             }
         }
         for (const npt of tempNonProjectTime) {
-            await fetch(`${API}/api/engineers/${engId}/non-project-time`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(npt) });
+            const addRes = await fetch(`${API}/api/engineers/${engId}/non-project-time`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(npt) });
+            if (!addRes.ok) throw new Error('Failed to update non-project time');
         }
         
         closeModal('engineer');

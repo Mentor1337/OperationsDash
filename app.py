@@ -443,6 +443,17 @@ def get_current_user():
     return session.get('username')
 
 
+def can_edit_engineer(engineer_id):
+    """Check if current user can edit the given engineer (admin or self)."""
+    username = session.get('username')
+    if not username:
+        return False
+    if username in ADMIN_USERS:
+        return True
+    engineer = Engineer.query.get(engineer_id)
+    return engineer and engineer.username == username
+
+
 def is_admin():
     """Check if the current session user is an admin."""
     return get_current_user() in ADMIN_USERS
@@ -920,11 +931,13 @@ def delete_engineer(id):
 
 # Non-Project Time endpoints
 @app.route('/api/engineers/<int:id>/non-project-time', methods=['POST'])
-@admin_required
+@login_required
 def add_non_project_time(id):
+    if not can_edit_engineer(id):
+        return jsonify({'error': 'Cannot edit another engineer\'s non-project time'}), 403
     engineer = Engineer.query.get_or_404(id)
     data = request.get_json()
-    
+
     npt = EngineerNonProjectTime(
         engineer_id=id,
         type=data['type'],
@@ -936,23 +949,27 @@ def add_non_project_time(id):
 
 
 @app.route('/api/engineers/<int:eng_id>/non-project-time/<int:npt_id>', methods=['PUT'])
-@admin_required
+@login_required
 def update_non_project_time(eng_id, npt_id):
+    if not can_edit_engineer(eng_id):
+        return jsonify({'error': 'Cannot edit another engineer\'s non-project time'}), 403
     npt = EngineerNonProjectTime.query.get_or_404(npt_id)
     data = request.get_json()
-    
+
     if 'type' in data:
         npt.type = data['type']
     if 'hours' in data:
         npt.hours = data['hours']
-    
+
     db.session.commit()
     return jsonify(npt.to_dict())
 
 
 @app.route('/api/engineers/<int:eng_id>/non-project-time/<int:npt_id>', methods=['DELETE'])
-@admin_required
+@login_required
 def delete_non_project_time(eng_id, npt_id):
+    if not can_edit_engineer(eng_id):
+        return jsonify({'error': 'Cannot edit another engineer\'s non-project time'}), 403
     npt = EngineerNonProjectTime.query.get_or_404(npt_id)
     db.session.delete(npt)
     db.session.commit()
