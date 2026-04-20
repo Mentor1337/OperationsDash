@@ -1859,6 +1859,8 @@ def get_parking_lot():
 @login_required
 def create_parking_lot_item():
     data = request.get_json()
+    if not data or not data.get('name'):
+        return jsonify({'error': 'Project name is required'}), 400
     item = ParkingLotItem(
         name=data['name'],
         description=data.get('description', ''),
