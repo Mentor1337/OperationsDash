@@ -24,7 +24,7 @@ wheels/
 *.egg
 
 # Database
-!instance/operations.db
+instance/operations.db
 instance/
 *.db
 *.sqlite
