@@ -43,7 +43,7 @@ IGNITION_API_USERNAME = os.getenv('IGNITION_API_USERNAME', '')
 IGNITION_API_PASSWORD = os.getenv('IGNITION_API_PASSWORD', '')
 
 # Admin users (usernames, lowercase, no domain)
-ADMIN_USERS = ['twilcox', 'csmoak', 'tthompson', 'epeschel', 'myumang']
+ADMIN_USERS = ['twilcox', 'csmoak', 'tthompson', 'epeschel', 'myumang', 'admin']
 
 # LDAP Authentication
 try:
@@ -409,6 +409,43 @@ class PlantIssueChangeHistory(db.Model):
             'newValue': self.new_value,
             'changedAt': self.changed_at.isoformat() if self.changed_at else None,
             'changedBy': self.changed_by
+        }
+
+
+# ============================================================================
+# Parking Lot Model
+# ============================================================================
+
+class ParkingLotItem(db.Model):
+    __tablename__ = 'parking_lot_items'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text)
+    estimated_cost_min = db.Column(db.Float)
+    estimated_cost_max = db.Column(db.Float)
+    estimated_time_min = db.Column(db.String(100))
+    estimated_time_max = db.Column(db.String(100))
+    kpi_target = db.Column(db.String(200))
+    location = db.Column(db.String(100))
+    owner_id = db.Column(db.Integer, db.ForeignKey('engineers.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_by = db.Column(db.String(100))
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'description': self.description,
+            'estimatedCostMin': self.estimated_cost_min,
+            'estimatedCostMax': self.estimated_cost_max,
+            'estimatedTimeMin': self.estimated_time_min,
+            'estimatedTimeMax': self.estimated_time_max,
+            'kpiTarget': self.kpi_target,
+            'location': self.location,
+            'ownerId': self.owner_id,
+            'ownerName': self.owner.name if self.owner else None,
+            'createdAt': self.created_at.isoformat() if self.created_at else None,
+            'createdBy': self.created_by
         }
 
 
@@ -1804,6 +1841,99 @@ def delete_plant_issue_assignment(id):
     """Remove an engineer assignment from an issue"""
     assignment = PlantIssueAssignment.query.get_or_404(id)
     db.session.delete(assignment)
+    db.session.commit()
+    return '', 204
+
+
+# ============================================================================
+# API Routes - Parking Lot
+# ============================================================================
+
+@app.route('/api/parking-lot', methods=['GET'])
+def get_parking_lot():
+    items = ParkingLotItem.query.order_by(ParkingLotItem.created_at.desc()).all()
+    return jsonify([i.to_dict() for i in items])
+
+
+@app.route('/api/parking-lot', methods=['POST'])
+@login_required
+def create_parking_lot_item():
+    data = request.get_json()
+    if not data or not data.get('name'):
+        return jsonify({'error': 'Project name is required'}), 400
+    item = ParkingLotItem(
+        name=data['name'],
+        description=data.get('description', ''),
+        estimated_cost_min=data.get('estimatedCostMin'),
+        estimated_cost_max=data.get('estimatedCostMax'),
+        estimated_time_min=data.get('estimatedTimeMin', ''),
+        estimated_time_max=data.get('estimatedTimeMax', ''),
+        kpi_target=data.get('kpiTarget', ''),
+        location=data.get('location'),
+        owner_id=data.get('ownerId') or None,
+        created_by=session.get('username', 'System')
+    )
+    db.session.add(item)
+    db.session.commit()
+    return jsonify(item.to_dict()), 201
+
+
+@app.route('/api/parking-lot/<int:id>', methods=['PUT'])
+@login_required
+def update_parking_lot_item(id):
+    item = ParkingLotItem.query.get_or_404(id)
+    data = request.get_json()
+    if 'name' in data:
+        item.name = data['name']
+    if 'description' in data:
+        item.description = data['description']
+    if 'estimatedCostMin' in data:
+        item.estimated_cost_min = data['estimatedCostMin']
+    if 'estimatedCostMax' in data:
+        item.estimated_cost_max = data['estimatedCostMax']
+    if 'estimatedTimeMin' in data:
+        item.estimated_time_min = data['estimatedTimeMin']
+    if 'estimatedTimeMax' in data:
+        item.estimated_time_max = data['estimatedTimeMax']
+    if 'kpiTarget' in data:
+        item.kpi_target = data['kpiTarget']
+    if 'location' in data:
+        item.location = data['location']
+    if 'ownerId' in data:
+        item.owner_id = data['ownerId'] or None
+    db.session.commit()
+    return jsonify(item.to_dict())
+
+
+@app.route('/api/parking-lot/<int:id>/promote', methods=['POST'])
+@login_required
+def promote_parking_lot_item(id):
+    item = ParkingLotItem.query.get_or_404(id)
+
+    project = Project(
+        name=item.name,
+        notes=item.description or '',
+        owner_id=item.owner_id,
+        location=item.location,
+        priority='Medium',
+        status='Planned',
+        progress=0,
+        budget=0,
+        spent=0,
+        estimated_hours_per_week=0
+    )
+    db.session.add(project)
+    db.session.delete(item)
+    db.session.commit()
+    logger.info(f"Parking lot item '{item.name}' promoted to project by {session.get('username')}")
+    return jsonify(project.to_dict()), 201
+
+
+@app.route('/api/parking-lot/<int:id>', methods=['DELETE'])
+@login_required
+def delete_parking_lot_item(id):
+    item = ParkingLotItem.query.get_or_404(id)
+    db.session.delete(item)
     db.session.commit()
     return '', 204
 

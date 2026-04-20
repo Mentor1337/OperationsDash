@@ -24,6 +24,10 @@ let locationFilter = 'all';
 let expandedProjects = new Set();
 let editingMilestoneId = null;
 
+// Parking Lot state
+let parkingLotItems = [];
+let currentParkingLotItem = null;
+
 // Plant Issues state
 let plantIssues = [];
 let issueSearchQuery = '';
@@ -79,10 +83,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
 async function loadData() {
     try {
-        [projects, engineers, plantIssues] = await Promise.all([
+        [projects, engineers, plantIssues, parkingLotItems] = await Promise.all([
             fetch(`${API}/api/projects`).then(r => r.json()),
             fetch(`${API}/api/engineers`).then(r => r.json()),
-            fetch(`${API}/api/plant-issues`).then(r => r.json())
+            fetch(`${API}/api/plant-issues`).then(r => r.json()),
+            fetch(`${API}/api/parking-lot`).then(r => r.json())
         ]);
         renderCurrentTab();
         populateOwnerDropdowns();
@@ -119,6 +124,7 @@ function renderCurrentTab() {
         case 'resources': renderResources(); break;
         case 'budget': renderBudget(); break;
         case 'issues': renderIssues(); break;
+        case 'parking-lot': renderParkingLot(); break;
     }
 }
 
@@ -4273,6 +4279,229 @@ async function deleteIssueAssignment(assignmentId) {
         showToast('Assignment removed', 'success');
     } catch (err) {
         showToast('Failed to remove assignment', 'error');
+        console.error(err);
+    }
+}
+
+// ============================================================================
+// Parking Lot Tab
+// ============================================================================
+
+function renderParkingLot() {
+    const container = document.getElementById('content-parking-lot');
+    if (!Array.isArray(parkingLotItems)) parkingLotItems = [];
+    const kpis = ['Safety', 'Quality', 'Delivery', 'Cost', 'People', 'Environment'];
+    const locations = ['Module Line', 'Pack Line', 'Line Agnostic'];
+
+    container.innerHTML = `
+        <div class="flex justify-between items-center mb-4">
+            <h2 class="text-xl font-bold text-gray-800">Parking Lot</h2>
+            <button onclick="openParkingLotModal()" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 text-sm font-medium">
+                + Add Item
+            </button>
+        </div>
+
+        ${parkingLotItems.length === 0 ? `
+            <div class="bg-white rounded-lg shadow-md p-12 text-center text-gray-500">
+                <p class="text-lg font-medium">No items in the parking lot</p>
+                <p class="text-sm mt-1">Add project ideas to evaluate and prioritize later.</p>
+            </div>
+        ` : `
+        <div class="bg-white rounded-lg shadow-md overflow-hidden">
+            <table class="w-full text-sm">
+                <thead class="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                        <th class="text-left px-4 py-3 font-semibold text-gray-700">Project Name</th>
+                        <th class="text-left px-4 py-3 font-semibold text-gray-700">Description</th>
+                        <th class="text-left px-4 py-3 font-semibold text-gray-700">Location</th>
+                        <th class="text-left px-4 py-3 font-semibold text-gray-700">Est. Cost Range</th>
+                        <th class="text-left px-4 py-3 font-semibold text-gray-700">Est. Time Range</th>
+                        <th class="text-left px-4 py-3 font-semibold text-gray-700">Owner</th>
+                        <th class="text-left px-4 py-3 font-semibold text-gray-700">KPI Target</th>
+                        <th class="text-left px-4 py-3 font-semibold text-gray-700">Added By</th>
+                        <th class="text-right px-4 py-3 font-semibold text-gray-700">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    ${parkingLotItems.map(item => `
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-4 py-3 font-medium text-gray-900">${(item.name)}</td>
+                        <td class="px-4 py-3 text-gray-600 max-w-xs">
+                            <div class="truncate max-w-xs" title="${(item.description || '')}">${(item.description || '—')}</div>
+                        </td>
+                        <td class="px-4 py-3 text-gray-700">${item.location || '—'}</td>
+                        <td class="px-4 py-3 text-gray-700">${
+                            item.estimatedCostMin != null || item.estimatedCostMax != null
+                                ? [item.estimatedCostMin, item.estimatedCostMax].filter(v => v != null).map(v => '$' + Number(v).toLocaleString()).join(' – ')
+                                : '—'
+                        }</td>
+                        <td class="px-4 py-3 text-gray-700">${
+                            item.estimatedTimeMin || item.estimatedTimeMax
+                                ? [item.estimatedTimeMin, item.estimatedTimeMax].filter(Boolean).join(' – ')
+                                : '—'
+                        }</td>
+                        <td class="px-4 py-3 text-gray-700">${item.ownerName || '—'}</td>
+                        <td class="px-4 py-3">
+                            ${item.kpiTarget ? `<span class="px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-xs font-medium">${(item.kpiTarget)}</span>` : '—'}
+                        </td>
+                        <td class="px-4 py-3 text-gray-500">${(item.createdBy || '')}</td>
+                        <td class="px-4 py-3 text-right">
+                            <button onclick="promoteParkingLotItem(${item.id}, '${(item.name || '').replace(/'/g, "\\'")}')" class="text-green-600 hover:text-green-800 mr-3 text-xs font-medium">→ Export to Project</button>
+                            <button onclick="openParkingLotModal(${item.id})" class="text-blue-600 hover:text-blue-800 mr-3 text-xs font-medium">Edit</button>
+                            <button onclick="deleteParkingLotItem(${item.id})" class="text-red-600 hover:text-red-800 text-xs font-medium">Delete</button>
+                        </td>
+                    </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+        `}
+
+        <!-- Parking Lot Modal -->
+        <div id="modal-parking-lot" class="modal hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div class="bg-white rounded-lg p-6 w-full max-w-lg">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-xl font-bold" id="parking-lot-modal-title">Add Parking Lot Item</h3>
+                    <button onclick="closeParkingLotModal()" class="text-gray-500 hover:text-gray-700">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Project Name *</label>
+                        <input id="pl-name" type="text" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Enter project name">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                        <textarea id="pl-description" rows="3" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="What problem does this solve?"></textarea>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Estimated Cost Range ($)</label>
+                        <div class="flex items-center gap-2">
+                            <input id="pl-cost-min" type="number" min="0" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Min">
+                            <span class="text-gray-400 text-sm">to</span>
+                            <input id="pl-cost-max" type="number" min="0" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Max">
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Estimated Time Range</label>
+                        <div class="flex items-center gap-2">
+                            <input id="pl-time-min" type="text" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g. 3 months">
+                            <span class="text-gray-400 text-sm">to</span>
+                            <input id="pl-time-max" type="text" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g. 6 months">
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Location</label>
+                            <select id="pl-location" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <option value="">— Select Location —</option>
+                                ${locations.map(l => `<option value="${l}">${l}</option>`).join('')}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Owner</label>
+                            <select id="pl-owner" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <option value="">— TBD —</option>
+                                ${engineers.map(e => `<option value="${e.id}">${e.name}</option>`).join('')}
+                            </select>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">KPI Target</label>
+                        <select id="pl-kpi" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="">— Select KPI —</option>
+                            ${kpis.map(k => `<option value="${k}">${k}</option>`).join('')}
+                        </select>
+                    </div>
+                </div>
+                <div class="flex justify-end gap-3 mt-6">
+                    <button onclick="closeParkingLotModal()" class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cancel</button>
+                    <button onclick="saveParkingLotItem()" class="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 font-medium">Save</button>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function openParkingLotModal(id) {
+    currentParkingLotItem = id ? parkingLotItems.find(i => i.id === id) : null;
+    document.getElementById('parking-lot-modal-title').textContent = currentParkingLotItem ? 'Edit Parking Lot Item' : 'Add Parking Lot Item';
+    document.getElementById('pl-name').value = currentParkingLotItem ? currentParkingLotItem.name : '';
+    document.getElementById('pl-description').value = currentParkingLotItem ? (currentParkingLotItem.description || '') : '';
+    document.getElementById('pl-cost-min').value = currentParkingLotItem && currentParkingLotItem.estimatedCostMin != null ? currentParkingLotItem.estimatedCostMin : '';
+    document.getElementById('pl-cost-max').value = currentParkingLotItem && currentParkingLotItem.estimatedCostMax != null ? currentParkingLotItem.estimatedCostMax : '';
+    document.getElementById('pl-time-min').value = currentParkingLotItem ? (currentParkingLotItem.estimatedTimeMin || '') : '';
+    document.getElementById('pl-time-max').value = currentParkingLotItem ? (currentParkingLotItem.estimatedTimeMax || '') : '';
+    document.getElementById('pl-location').value = currentParkingLotItem ? (currentParkingLotItem.location || '') : '';
+    document.getElementById('pl-owner').value = currentParkingLotItem && currentParkingLotItem.ownerId ? currentParkingLotItem.ownerId : '';
+    document.getElementById('pl-kpi').value = currentParkingLotItem ? (currentParkingLotItem.kpiTarget || '') : '';
+    document.getElementById('modal-parking-lot').classList.remove('hidden');
+}
+
+function closeParkingLotModal() {
+    document.getElementById('modal-parking-lot').classList.add('hidden');
+    currentParkingLotItem = null;
+}
+
+async function saveParkingLotItem() {
+    const name = document.getElementById('pl-name').value.trim();
+    if (!name) { showToast('Project name is required', 'error'); return; }
+
+    const payload = {
+        name,
+        description: document.getElementById('pl-description').value.trim(),
+        estimatedCostMin: document.getElementById('pl-cost-min').value !== '' ? parseFloat(document.getElementById('pl-cost-min').value) : null,
+        estimatedCostMax: document.getElementById('pl-cost-max').value !== '' ? parseFloat(document.getElementById('pl-cost-max').value) : null,
+        estimatedTimeMin: document.getElementById('pl-time-min').value.trim(),
+        estimatedTimeMax: document.getElementById('pl-time-max').value.trim(),
+        kpiTarget: document.getElementById('pl-kpi').value,
+        location: document.getElementById('pl-location').value,
+        ownerId: document.getElementById('pl-owner').value ? parseInt(document.getElementById('pl-owner').value) : null
+    };
+
+    try {
+        const url = currentParkingLotItem ? `${API}/api/parking-lot/${currentParkingLotItem.id}` : `${API}/api/parking-lot`;
+        const method = currentParkingLotItem ? 'PUT' : 'POST';
+        const response = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        if (await handleApiError(response)) return;
+        if (!response.ok) throw new Error('Failed to save');
+        await loadData();
+        closeParkingLotModal();
+        showToast(currentParkingLotItem ? 'Item updated' : 'Item added', 'success');
+    } catch (err) {
+        showToast('Failed to save item', 'error');
+        console.error(err);
+    }
+}
+
+async function promoteParkingLotItem(id, name) {
+    if (!confirm(`Export "${name}" to the Projects tab?\n\nIt will be removed from the Parking Lot and created as a Planned project. You can fill in the remaining details there.`)) return;
+    try {
+        const response = await fetch(`${API}/api/parking-lot/${id}/promote`, { method: 'POST' });
+        if (await handleApiError(response)) return;
+        if (!response.ok) throw new Error('Failed to promote');
+        await loadData();
+        setTab('projects');
+        showToast(`"${name}" added to Projects`, 'success');
+    } catch (err) {
+        showToast('Failed to export to project', 'error');
+        console.error(err);
+    }
+}
+
+async function deleteParkingLotItem(id) {
+    if (!confirm('Delete this parking lot item?')) return;
+    try {
+        const response = await fetch(`${API}/api/parking-lot/${id}`, { method: 'DELETE' });
+        if (await handleApiError(response)) return;
+        if (!response.ok) throw new Error('Failed to delete');
+        await loadData();
+        showToast('Item deleted', 'success');
+    } catch (err) {
+        showToast('Failed to delete item', 'error');
         console.error(err);
     }
 }
