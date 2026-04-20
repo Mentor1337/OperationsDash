@@ -443,7 +443,7 @@ class ParkingLotItem(db.Model):
             'kpiTarget': self.kpi_target,
             'location': self.location,
             'ownerId': self.owner_id,
-            'ownerName': Engineer.query.get(self.owner_id).name if self.owner_id else None,
+            'ownerName': self.owner.name if self.owner else None,
             'createdAt': self.created_at.isoformat() if self.created_at else None,
             'createdBy': self.created_by
         }
