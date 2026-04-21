@@ -431,6 +431,9 @@ class ParkingLotItem(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     created_by = db.Column(db.String(100))
 
+    # Relationships
+    owner = db.relationship('Engineer', backref='parking_lot_items', lazy=True)
+
     def to_dict(self):
         return {
             'id': self.id,
