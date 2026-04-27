@@ -1,4 +1,5 @@
-// Operations Dashboard - Frontend JavaScript
+// Operations Dashboard - Frontend JavaScript - MULTISELECT VERSION
+console.log('MULTISELECT VERSION LOADED');
 // API Base URL
 const API = '';
 
@@ -17,10 +18,11 @@ let engineers = [];
 let currentTab = 'projects';
 let currentProject = null;
 let searchQuery = '';
-let statusFilter = 'all';
-let ownerFilter = 'all';
-let priorityFilter = 'all';
-let locationFilter = 'all';
+// Multi-select filter arrays (empty = show all)
+let statusFilters = [];
+let ownerFilters = [];
+let priorityFilters = [];
+let locationFilters = [];
 let expandedProjects = new Set();
 let editingMilestoneId = null;
 
@@ -31,10 +33,11 @@ let currentParkingLotItem = null;
 // Plant Issues state
 let plantIssues = [];
 let issueSearchQuery = '';
-let issueStatusFilter = 'all';
-let issueSeverityFilter = 'all';
-let issueLocationFilter = 'all';
-let issueCategoryFilter = 'all';
+// Multi-select filter arrays for Issues (empty = show all)
+let issueStatusFilters = [];
+let issueSeverityFilters = [];
+let issueLocationFilters = [];
+let issueCategoryFilters = [];
 let expandedIssues = new Set();
 let currentIssue = null;
 
@@ -57,6 +60,83 @@ let ganttChartInstance = null;
 let capacityChartInstance = null;
 let milestoneCumulativeChartInstance = null;
 let capacityTrendChartInstance = null;
+
+// ============================================================================
+// Multi-Select Filter Component
+// ============================================================================
+
+function createMultiSelectFilter(id, label, options, selectedValues, onChangeHandler) {
+    const selectedCount = selectedValues.length;
+    const displayLabel = selectedCount > 0 ? `${label} (${selectedCount})` : label;
+
+    return `
+        <div class="relative multi-select-container" id="${id}-container">
+            <button type="button"
+                class="w-full px-3 py-2 border ${selectedCount > 0 ? 'border-blue-500 bg-blue-50' : 'border-gray-300'} rounded-lg text-left flex justify-between items-center hover:border-gray-400"
+                onclick="toggleMultiSelectDropdown('${id}')">
+                <span class="${selectedCount > 0 ? 'text-blue-700' : 'text-gray-700'}">${displayLabel}</span>
+                <svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                </svg>
+            </button>
+            <div id="${id}-dropdown" class="hidden absolute z-50 mt-1 w-full bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                <div class="sticky top-0 bg-white border-b border-gray-200 px-3 py-2 flex justify-between">
+                    <button type="button" class="text-sm text-blue-600 hover:text-blue-800" onclick="selectAllMultiFilter('${id}', '${onChangeHandler}', ${JSON.stringify(options).replace(/"/g, '&quot;')})">Select All</button>
+                    <button type="button" class="text-sm text-blue-600 hover:text-blue-800" onclick="deselectAllMultiFilter('${id}', '${onChangeHandler}')">Deselect All</button>
+                </div>
+                <div class="py-1">
+                    ${options.map(opt => `
+                        <label class="flex items-center px-3 py-1.5 hover:bg-gray-100 cursor-pointer">
+                            <input type="checkbox"
+                                class="mr-2 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                value="${opt}"
+                                ${selectedValues.includes(opt) ? 'checked' : ''}
+                                onchange="${onChangeHandler}('${opt}', this.checked)">
+                            <span class="text-sm text-gray-700">${opt}</span>
+                        </label>
+                    `).join('')}
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function toggleMultiSelectDropdown(id) {
+    const dropdown = document.getElementById(`${id}-dropdown`);
+    const allDropdowns = document.querySelectorAll('.multi-select-container [id$="-dropdown"]');
+
+    // Close all other dropdowns
+    allDropdowns.forEach(d => {
+        if (d.id !== `${id}-dropdown`) {
+            d.classList.add('hidden');
+        }
+    });
+
+    // Toggle the clicked dropdown
+    dropdown.classList.toggle('hidden');
+}
+
+function selectAllMultiFilter(id, handlerName, options) {
+    const handler = window[handlerName];
+    options.forEach(opt => handler(opt, true));
+}
+
+function deselectAllMultiFilter(id, handlerName) {
+    const handler = window[handlerName];
+    // Get the current filter array and clear it by calling handler with false for each
+    const dropdown = document.getElementById(`${id}-dropdown`);
+    const checkboxes = dropdown.querySelectorAll('input[type="checkbox"]:checked');
+    checkboxes.forEach(cb => handler(cb.value, false));
+}
+
+// Close multi-select dropdowns when clicking outside
+document.addEventListener('click', (e) => {
+    if (!e.target.closest('.multi-select-container')) {
+        document.querySelectorAll('.multi-select-container [id$="-dropdown"]').forEach(d => {
+            d.classList.add('hidden');
+        });
+    }
+});
 
 // ============================================================================
 // Initialization
@@ -138,7 +218,8 @@ function renderProjects() {
     const locations = ['Module Line', 'Pack Line', 'Line Agnostic'];
     const priorities = ['Critical', 'High', 'Medium', 'Low'];
     const statuses = ['On Track', 'At Risk', 'Behind', 'Planned', 'Completed', 'Cancelled'];
-    const hasActiveFilters = ownerFilter !== 'all' || priorityFilter !== 'all' || statusFilter !== 'all' || locationFilter !== 'all';
+    const hasActiveFilters = ownerFilters.length > 0 || priorityFilters.length > 0 ||
+                             statusFilters.length > 0 || locationFilters.length > 0;
     const filtered = getFilteredProjects();
 
     container.innerHTML = `
@@ -167,41 +248,13 @@ function renderProjects() {
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
                     </svg>
                 </div>
-                <div>
-                    <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleLocationFilter(this.value)">
-                        <option value="all" ${locationFilter === 'all' ? 'selected' : ''}>All Locations</option>
-                        ${locations.map(loc => `<option value="${loc}" ${locationFilter === loc ? 'selected' : ''}>${loc}</option>`).join('')}
-                        <option disabled>──────────</option>
-                        ${locations.map(loc => `<option value="not:${loc}" ${locationFilter === 'not:' + loc ? 'selected' : ''}>Not ${loc}</option>`).join('')}
-                    </select>
-                </div>
-                <div>
-                    <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleOwnerFilter(this.value)">
-                        <option value="all" ${ownerFilter === 'all' ? 'selected' : ''}>All Owners</option>
-                        ${uniqueOwners.map(owner => `<option value="${owner}" ${ownerFilter === owner ? 'selected' : ''}>${owner}</option>`).join('')}
-                        <option disabled>──────────</option>
-                        ${uniqueOwners.map(owner => `<option value="not:${owner}" ${ownerFilter === 'not:' + owner ? 'selected' : ''}>Not ${owner}</option>`).join('')}
-                    </select>
-                </div>
-                <div>
-                    <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handlePriorityFilter(this.value)">
-                        <option value="all" ${priorityFilter === 'all' ? 'selected' : ''}>All Priorities</option>
-                        ${priorities.map(p => `<option value="${p}" ${priorityFilter === p ? 'selected' : ''}>${p}</option>`).join('')}
-                        <option disabled>──────────</option>
-                        ${priorities.map(p => `<option value="not:${p}" ${priorityFilter === 'not:' + p ? 'selected' : ''}>Not ${p}</option>`).join('')}
-                    </select>
-                </div>
-                <div>
-                    <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleStatusFilter(this.value)">
-                        <option value="all" ${statusFilter === 'all' ? 'selected' : ''}>All Statuses</option>
-                        ${statuses.map(s => `<option value="${s}" ${statusFilter === s ? 'selected' : ''}>${s}</option>`).join('')}
-                        <option disabled>──────────</option>
-                        ${statuses.map(s => `<option value="not:${s}" ${statusFilter === 'not:' + s ? 'selected' : ''}>Not ${s}</option>`).join('')}
-                    </select>
-                </div>
+                ${createMultiSelectFilter('project-location', 'All Locations', locations, locationFilters, 'handleLocationFilterChange')}
+                ${createMultiSelectFilter('project-owner', 'All Owners', uniqueOwners, ownerFilters, 'handleOwnerFilterChange')}
+                ${createMultiSelectFilter('project-priority', 'All Priorities', priorities, priorityFilters, 'handlePriorityFilterChange')}
+                ${createMultiSelectFilter('project-status', 'All Statuses', statuses, statusFilters, 'handleStatusFilterChange')}
             </div>
         </div>
-        
+
         <div class="space-y-4" id="projects-list"></div>
     `;
     
@@ -222,33 +275,21 @@ function getFilteredProjects() {
             p.owner.toLowerCase().includes(searchQuery.toLowerCase()) ||
             (p.notes && p.notes.toLowerCase().includes(searchQuery.toLowerCase()));
 
-        // Handle owner filter with include/exclude and milestone assignments
+        // Handle owner filter with multi-select (includes milestone assignments)
         let matchesOwner;
-        if (ownerFilter === 'all') {
+        if (ownerFilters.length === 0) {
             matchesOwner = true;
-        } else if (ownerFilter.startsWith('not:')) {
-            const excludeOwner = ownerFilter.slice(4);
-            const isAssignedToMilestone = (p.milestones || []).some(m =>
-                (m.assignments || []).some(a => a.engineer === excludeOwner)
-            );
-            matchesOwner = p.owner !== excludeOwner && !isAssignedToMilestone;
         } else {
             const isAssignedToMilestone = (p.milestones || []).some(m =>
-                (m.assignments || []).some(a => a.engineer === ownerFilter)
+                (m.assignments || []).some(a => ownerFilters.includes(a.engineer))
             );
-            matchesOwner = p.owner === ownerFilter || isAssignedToMilestone;
+            matchesOwner = ownerFilters.includes(p.owner) || isAssignedToMilestone;
         }
 
-        // Handle include/exclude for other filters
-        const matchesPriority = priorityFilter === 'all' ? true :
-            priorityFilter.startsWith('not:') ? p.priority !== priorityFilter.slice(4) :
-            p.priority === priorityFilter;
-        const matchesStatus = statusFilter === 'all' ? true :
-            statusFilter.startsWith('not:') ? p.status !== statusFilter.slice(4) :
-            p.status === statusFilter;
-        const matchesLocation = locationFilter === 'all' ? true :
-            locationFilter.startsWith('not:') ? p.location !== locationFilter.slice(4) :
-            p.location === locationFilter;
+        // Handle multi-select filters (empty array = show all, OR logic within filter)
+        const matchesPriority = priorityFilters.length === 0 || priorityFilters.includes(p.priority);
+        const matchesStatus = statusFilters.length === 0 || statusFilters.includes(p.status);
+        const matchesLocation = locationFilters.length === 0 || locationFilters.includes(p.location);
 
         return matchesSearch && matchesOwner && matchesPriority && matchesStatus && matchesLocation;
     });
@@ -259,33 +300,99 @@ function handleSearch(value) {
     updateProjectList();
 }
 
-function handleOwnerFilter(value) {
-    ownerFilter = value;
+function handleOwnerFilterChange(value, isChecked) {
+    if (isChecked) {
+        if (!ownerFilters.includes(value)) {
+            ownerFilters.push(value);
+        }
+    } else {
+        ownerFilters = ownerFilters.filter(v => v !== value);
+    }
     updateProjectList();
 }
 
-function handlePriorityFilter(value) {
-    priorityFilter = value;
+function handlePriorityFilterChange(value, isChecked) {
+    if (isChecked) {
+        if (!priorityFilters.includes(value)) {
+            priorityFilters.push(value);
+        }
+    } else {
+        priorityFilters = priorityFilters.filter(v => v !== value);
+    }
     updateProjectList();
 }
 
-function handleStatusFilter(value) {
-    statusFilter = value;
+function handleStatusFilterChange(value, isChecked) {
+    if (isChecked) {
+        if (!statusFilters.includes(value)) {
+            statusFilters.push(value);
+        }
+    } else {
+        statusFilters = statusFilters.filter(v => v !== value);
+    }
     updateProjectList();
 }
 
-function handleLocationFilter(value) {
-    locationFilter = value;
+function handleLocationFilterChange(value, isChecked) {
+    if (isChecked) {
+        if (!locationFilters.includes(value)) {
+            locationFilters.push(value);
+        }
+    } else {
+        locationFilters = locationFilters.filter(v => v !== value);
+    }
     updateProjectList();
+}
+
+function updateProjectList() {
+    // Re-render to update filter UI state and project list
+    renderProjects();
 }
 
 function clearFilters() {
     searchQuery = '';
-    ownerFilter = 'all';
-    priorityFilter = 'all';
-    statusFilter = 'all';
-    locationFilter = 'all';
+    ownerFilters = [];
+    priorityFilters = [];
+    statusFilters = [];
+    locationFilters = [];
     renderProjects();
+}
+
+// Roadmap-specific filter handlers (update state and re-render roadmap)
+function handleRoadmapLocationFilterChange(value, isChecked) {
+    if (isChecked) {
+        if (!locationFilters.includes(value)) locationFilters.push(value);
+    } else {
+        locationFilters = locationFilters.filter(v => v !== value);
+    }
+    renderRoadmap();
+}
+
+function handleRoadmapOwnerFilterChange(value, isChecked) {
+    if (isChecked) {
+        if (!ownerFilters.includes(value)) ownerFilters.push(value);
+    } else {
+        ownerFilters = ownerFilters.filter(v => v !== value);
+    }
+    renderRoadmap();
+}
+
+function handleRoadmapPriorityFilterChange(value, isChecked) {
+    if (isChecked) {
+        if (!priorityFilters.includes(value)) priorityFilters.push(value);
+    } else {
+        priorityFilters = priorityFilters.filter(v => v !== value);
+    }
+    renderRoadmap();
+}
+
+function handleRoadmapStatusFilterChange(value, isChecked) {
+    if (isChecked) {
+        if (!statusFilters.includes(value)) statusFilters.push(value);
+    } else {
+        statusFilters = statusFilters.filter(v => v !== value);
+    }
+    renderRoadmap();
 }
 
 function toggleProject(id) {
@@ -1348,7 +1455,8 @@ function renderRoadmap() {
     const locations = ['Module Line', 'Pack Line', 'Line Agnostic'];
     const priorities = ['Critical', 'High', 'Medium', 'Low'];
     const statuses = ['On Track', 'At Risk', 'Behind', 'Planned', 'Completed', 'Cancelled'];
-    const hasActiveFilters = ownerFilter !== 'all' || priorityFilter !== 'all' || statusFilter !== 'all' || locationFilter !== 'all';
+    const hasActiveFilters = ownerFilters.length > 0 || priorityFilters.length > 0 ||
+                             statusFilters.length > 0 || locationFilters.length > 0;
     const filteredProjects = getFilteredProjects();
 
     container.innerHTML = `
@@ -1371,35 +1479,19 @@ function renderRoadmap() {
             <div class="grid grid-cols-4 gap-4">
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Location</label>
-                    <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleLocationFilter(this.value); renderRoadmap();">
-                        <option value="all" ${locationFilter === 'all' ? 'selected' : ''}>All Locations</option>
-                        ${locations.map(loc => `<option value="${loc}" ${locationFilter === loc ? 'selected' : ''}>${loc}</option>`).join('')}
-                        ${locations.map(loc => `<option value="not:${loc}" ${locationFilter === 'not:' + loc ? 'selected' : ''}>Not ${loc}</option>`).join('')}
-                    </select>
+                    ${createMultiSelectFilter('roadmap-location', 'All Locations', locations, locationFilters, 'handleRoadmapLocationFilterChange')}
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Owner</label>
-                    <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleOwnerFilter(this.value); renderRoadmap();">
-                        <option value="all" ${ownerFilter === 'all' ? 'selected' : ''}>All Owners</option>
-                        ${uniqueOwners.map(owner => `<option value="${owner}" ${ownerFilter === owner ? 'selected' : ''}>${owner}</option>`).join('')}
-                        ${uniqueOwners.map(owner => `<option value="not:${owner}" ${ownerFilter === 'not:' + owner ? 'selected' : ''}>Not ${owner}</option>`).join('')}
-                    </select>
+                    ${createMultiSelectFilter('roadmap-owner', 'All Owners', uniqueOwners, ownerFilters, 'handleRoadmapOwnerFilterChange')}
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Priority</label>
-                    <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handlePriorityFilter(this.value); renderRoadmap();">
-                        <option value="all" ${priorityFilter === 'all' ? 'selected' : ''}>All Priorities</option>
-                        ${priorities.map(p => `<option value="${p}" ${priorityFilter === p ? 'selected' : ''}>${p}</option>`).join('')}
-                        ${priorities.map(p => `<option value="not:${p}" ${priorityFilter === 'not:' + p ? 'selected' : ''}>Not ${p}</option>`).join('')}
-                    </select>
+                    ${createMultiSelectFilter('roadmap-priority', 'All Priorities', priorities, priorityFilters, 'handleRoadmapPriorityFilterChange')}
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Status</label>
-                    <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleStatusFilter(this.value); renderRoadmap();">
-                        <option value="all" ${statusFilter === 'all' ? 'selected' : ''}>All Statuses</option>
-                        ${statuses.map(s => `<option value="${s}" ${statusFilter === s ? 'selected' : ''}>${s}</option>`).join('')}
-                        ${statuses.map(s => `<option value="not:${s}" ${statusFilter === 'not:' + s ? 'selected' : ''}>Not ${s}</option>`).join('')}
-                    </select>
+                    ${createMultiSelectFilter('roadmap-status', 'All Statuses', statuses, statusFilters, 'handleRoadmapStatusFilterChange')}
                 </div>
             </div>
             <div class="mt-4 flex items-center space-x-2">
@@ -1778,7 +1870,7 @@ function renderMilestones() {
     const container = document.getElementById('content-milestones');
     const currentYear = new Date().getFullYear();
     const yearOptions = [currentYear - 1, currentYear, currentYear + 1, currentYear + 2, currentYear + 3, currentYear + 4];
-    const hasActiveFilters = ownerFilter !== 'all' || priorityFilter !== 'all' || statusFilter !== 'all';
+    const hasActiveFilters = ownerFilters.length > 0 || priorityFilters.length > 0 || statusFilters.length > 0;
     
     // Get milestones from filtered projects based on date range
     const filteredProjects = getFilteredProjects();
@@ -3242,11 +3334,48 @@ function handleBudgetYearFilter(value) {
     renderBudget();
 }
 
+// Budget-specific filter handlers
+function handleBudgetLocationFilterChange(value, isChecked) {
+    if (isChecked) {
+        if (!locationFilters.includes(value)) locationFilters.push(value);
+    } else {
+        locationFilters = locationFilters.filter(v => v !== value);
+    }
+    renderBudget();
+}
+
+function handleBudgetOwnerFilterChange(value, isChecked) {
+    if (isChecked) {
+        if (!ownerFilters.includes(value)) ownerFilters.push(value);
+    } else {
+        ownerFilters = ownerFilters.filter(v => v !== value);
+    }
+    renderBudget();
+}
+
+function handleBudgetPriorityFilterChange(value, isChecked) {
+    if (isChecked) {
+        if (!priorityFilters.includes(value)) priorityFilters.push(value);
+    } else {
+        priorityFilters = priorityFilters.filter(v => v !== value);
+    }
+    renderBudget();
+}
+
+function handleBudgetStatusFilterChange(value, isChecked) {
+    if (isChecked) {
+        if (!statusFilters.includes(value)) statusFilters.push(value);
+    } else {
+        statusFilters = statusFilters.filter(v => v !== value);
+    }
+    renderBudget();
+}
+
 function clearBudgetFilters() {
-    locationFilter = 'all';
-    ownerFilter = 'all';
-    priorityFilter = 'all';
-    statusFilter = 'all';
+    locationFilters = [];
+    ownerFilters = [];
+    priorityFilters = [];
+    statusFilters = [];
     budgetYearFilter = 'all';
     renderBudget();
 }
@@ -3271,14 +3400,15 @@ function renderBudget() {
     });
     const yearOptions = [...allYears].sort((a, b) => a - b);
 
-    const hasActiveFilters = locationFilter !== 'all' || ownerFilter !== 'all' || priorityFilter !== 'all' || statusFilter !== 'all' || budgetYearFilter !== 'all';
+    const hasActiveFilters = locationFilters.length > 0 || ownerFilters.length > 0 ||
+                             priorityFilters.length > 0 || statusFilters.length > 0 || budgetYearFilter !== 'all';
 
-    // Filter projects based on selected filters
+    // Filter projects based on selected filters (using multi-select arrays)
     const filteredProjects = projects.filter(p => {
-        const matchesLocation = locationFilter === 'all' || p.location === locationFilter;
-        const matchesOwner = ownerFilter === 'all' || p.owner === ownerFilter;
-        const matchesPriority = priorityFilter === 'all' || p.priority === priorityFilter;
-        const matchesStatus = statusFilter === 'all' || p.status === statusFilter;
+        const matchesLocation = locationFilters.length === 0 || locationFilters.includes(p.location);
+        const matchesOwner = ownerFilters.length === 0 || ownerFilters.includes(p.owner);
+        const matchesPriority = priorityFilters.length === 0 || priorityFilters.includes(p.priority);
+        const matchesStatus = statusFilters.length === 0 || statusFilters.includes(p.status);
         const projectStartYear = p.startDate ? parseInt(p.startDate.split('-')[0]) : null;
         const projectEndYear = p.endDate ? parseInt(p.endDate.split('-')[0]) : null;
         const matchesYear = budgetYearFilter === 'all' ||
@@ -3384,31 +3514,19 @@ function renderBudget() {
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Location</label>
-                    <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleLocationFilter(this.value); renderBudget();">
-                        <option value="all" ${locationFilter === 'all' ? 'selected' : ''}>All Locations</option>
-                        ${locations.map(loc => '<option value="' + loc + '" ' + (locationFilter === loc ? 'selected' : '') + '>' + loc + '</option>').join('')}
-                    </select>
+                    ${createMultiSelectFilter('budget-location', 'All Locations', locations, locationFilters, 'handleBudgetLocationFilterChange')}
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Owner</label>
-                    <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleOwnerFilter(this.value); renderBudget();">
-                        <option value="all" ${ownerFilter === 'all' ? 'selected' : ''}>All Owners</option>
-                        ${uniqueOwners.map(owner => '<option value="' + owner + '" ' + (ownerFilter === owner ? 'selected' : '') + '>' + owner + '</option>').join('')}
-                    </select>
+                    ${createMultiSelectFilter('budget-owner', 'All Owners', uniqueOwners, ownerFilters, 'handleBudgetOwnerFilterChange')}
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Priority</label>
-                    <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handlePriorityFilter(this.value); renderBudget();">
-                        <option value="all" ${priorityFilter === 'all' ? 'selected' : ''}>All Priorities</option>
-                        ${priorities.map(p => '<option value="' + p + '" ' + (priorityFilter === p ? 'selected' : '') + '>' + p + '</option>').join('')}
-                    </select>
+                    ${createMultiSelectFilter('budget-priority', 'All Priorities', priorities, priorityFilters, 'handleBudgetPriorityFilterChange')}
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Status</label>
-                    <select class="w-full px-3 py-2 border border-gray-300 rounded-lg" onchange="handleStatusFilter(this.value); renderBudget();">
-                        <option value="all" ${statusFilter === 'all' ? 'selected' : ''}>All Statuses</option>
-                        ${statuses.map(s => '<option value="' + s + '" ' + (statusFilter === s ? 'selected' : '') + '>' + s + '</option>').join('')}
-                    </select>
+                    ${createMultiSelectFilter('budget-status', 'All Statuses', statuses, statusFilters, 'handleBudgetStatusFilterChange')}
                 </div>
             </div>
         </div>
@@ -3710,7 +3828,17 @@ function canEditProject(project) {
     if (!authState.authenticated) return false;
     if (authState.isAdmin) return true;
     if (!authState.engineerId) return false;
-    return project.ownerId === authState.engineerId;
+    // Owner can edit
+    if (project.ownerId === authState.engineerId) return true;
+    // Engineers assigned to any milestone can edit
+    const milestones = project.milestones || [];
+    for (const m of milestones) {
+        const assignments = m.assignments || [];
+        if (assignments.some(a => a.engineerId === authState.engineerId)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 function canCreateProject() {
@@ -3776,8 +3904,8 @@ function renderIssues() {
     const severities = ['Critical', 'High', 'Medium', 'Low'];
     const statuses = ['Open', 'In Progress', 'Resolved', 'Closed'];
     const categories = ['Equipment', 'Quality', 'Process', 'Safety', 'Other'];
-    const hasActiveFilters = issueStatusFilter !== 'all' || issueSeverityFilter !== 'all' ||
-                            issueLocationFilter !== 'all' || issueCategoryFilter !== 'all';
+    const hasActiveFilters = issueStatusFilters.length > 0 || issueSeverityFilters.length > 0 ||
+                            issueLocationFilters.length > 0 || issueCategoryFilters.length > 0;
     const filtered = getFilteredIssues();
 
     // Summary counts
@@ -3820,7 +3948,7 @@ function renderIssues() {
                 <svg class="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"></path></svg>
                 <span class="font-medium text-gray-700">Filters:</span>
                 ${hasActiveFilters ? `<button onclick="clearIssueFilters()" class="text-sm text-orange-600 hover:text-orange-700">Clear Filters</button>` : ''}
-                <span class="text-sm text-gray-600">Showing ${filtered.length} of ${plantIssues.length} issues</span>
+                <span class="text-sm text-gray-600" id="issues-filter-count">Showing ${filtered.length} of ${plantIssues.length} issues</span>
             </div>
             <div class="grid grid-cols-5 gap-4">
                 <div class="flex-1 relative">
@@ -3831,30 +3959,10 @@ function renderIssues() {
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
                     </svg>
                 </div>
-                <select class="px-3 py-2 border border-gray-300 rounded-lg" onchange="handleIssueLocationFilter(this.value)">
-                    <option value="all" ${issueLocationFilter === 'all' ? 'selected' : ''}>All Locations</option>
-                    ${locations.map(loc => `<option value="${loc}" ${issueLocationFilter === loc ? 'selected' : ''}>${loc}</option>`).join('')}
-                    <option disabled>──────────</option>
-                    ${locations.map(loc => `<option value="not:${loc}" ${issueLocationFilter === 'not:' + loc ? 'selected' : ''}>Not ${loc}</option>`).join('')}
-                </select>
-                <select class="px-3 py-2 border border-gray-300 rounded-lg" onchange="handleIssueSeverityFilter(this.value)">
-                    <option value="all" ${issueSeverityFilter === 'all' ? 'selected' : ''}>All Severities</option>
-                    ${severities.map(s => `<option value="${s}" ${issueSeverityFilter === s ? 'selected' : ''}>${s}</option>`).join('')}
-                    <option disabled>──────────</option>
-                    ${severities.map(s => `<option value="not:${s}" ${issueSeverityFilter === 'not:' + s ? 'selected' : ''}>Not ${s}</option>`).join('')}
-                </select>
-                <select class="px-3 py-2 border border-gray-300 rounded-lg" onchange="handleIssueStatusFilter(this.value)">
-                    <option value="all" ${issueStatusFilter === 'all' ? 'selected' : ''}>All Statuses</option>
-                    ${statuses.map(s => `<option value="${s}" ${issueStatusFilter === s ? 'selected' : ''}>${s}</option>`).join('')}
-                    <option disabled>──────────</option>
-                    ${statuses.map(s => `<option value="not:${s}" ${issueStatusFilter === 'not:' + s ? 'selected' : ''}>Not ${s}</option>`).join('')}
-                </select>
-                <select class="px-3 py-2 border border-gray-300 rounded-lg" onchange="handleIssueCategoryFilter(this.value)">
-                    <option value="all" ${issueCategoryFilter === 'all' ? 'selected' : ''}>All Categories</option>
-                    ${categories.map(c => `<option value="${c}" ${issueCategoryFilter === c ? 'selected' : ''}>${c}</option>`).join('')}
-                    <option disabled>──────────</option>
-                    ${categories.map(c => `<option value="not:${c}" ${issueCategoryFilter === 'not:' + c ? 'selected' : ''}>Not ${c}</option>`).join('')}
-                </select>
+                ${createMultiSelectFilter('issue-location', 'All Locations', locations, issueLocationFilters, 'handleIssueLocationFilterChange')}
+                ${createMultiSelectFilter('issue-severity', 'All Severities', severities, issueSeverityFilters, 'handleIssueSeverityFilterChange')}
+                ${createMultiSelectFilter('issue-status', 'All Statuses', statuses, issueStatusFilters, 'handleIssueStatusFilterChange')}
+                ${createMultiSelectFilter('issue-category', 'All Categories', categories, issueCategoryFilters, 'handleIssueCategoryFilterChange')}
             </div>
         </div>
 
@@ -3881,18 +3989,11 @@ function getFilteredIssues() {
             i.title.toLowerCase().includes(issueSearchQuery.toLowerCase()) ||
             (i.description && i.description.toLowerCase().includes(issueSearchQuery.toLowerCase()));
 
-        const matchesStatus = issueStatusFilter === 'all' ? true :
-            issueStatusFilter.startsWith('not:') ? i.status !== issueStatusFilter.slice(4) :
-            i.status === issueStatusFilter;
-        const matchesSeverity = issueSeverityFilter === 'all' ? true :
-            issueSeverityFilter.startsWith('not:') ? i.severity !== issueSeverityFilter.slice(4) :
-            i.severity === issueSeverityFilter;
-        const matchesLocation = issueLocationFilter === 'all' ? true :
-            issueLocationFilter.startsWith('not:') ? i.location !== issueLocationFilter.slice(4) :
-            i.location === issueLocationFilter;
-        const matchesCategory = issueCategoryFilter === 'all' ? true :
-            issueCategoryFilter.startsWith('not:') ? i.category !== issueCategoryFilter.slice(4) :
-            i.category === issueCategoryFilter;
+        // Handle multi-select filters (empty array = show all, OR logic within filter)
+        const matchesStatus = issueStatusFilters.length === 0 || issueStatusFilters.includes(i.status);
+        const matchesSeverity = issueSeverityFilters.length === 0 || issueSeverityFilters.includes(i.severity);
+        const matchesLocation = issueLocationFilters.length === 0 || issueLocationFilters.includes(i.location);
+        const matchesCategory = issueCategoryFilters.length === 0 || issueCategoryFilters.includes(i.category);
 
         return matchesSearch && matchesStatus && matchesSeverity && matchesLocation && matchesCategory;
     });
@@ -3903,32 +4004,56 @@ function handleIssueSearch(value) {
     updateIssueList();
 }
 
-function handleIssueStatusFilter(value) {
-    issueStatusFilter = value;
-    updateIssueList();
+function handleIssueStatusFilterChange(value, isChecked) {
+    if (isChecked) {
+        if (!issueStatusFilters.includes(value)) {
+            issueStatusFilters.push(value);
+        }
+    } else {
+        issueStatusFilters = issueStatusFilters.filter(v => v !== value);
+    }
+    renderIssues();
 }
 
-function handleIssueSeverityFilter(value) {
-    issueSeverityFilter = value;
-    updateIssueList();
+function handleIssueSeverityFilterChange(value, isChecked) {
+    if (isChecked) {
+        if (!issueSeverityFilters.includes(value)) {
+            issueSeverityFilters.push(value);
+        }
+    } else {
+        issueSeverityFilters = issueSeverityFilters.filter(v => v !== value);
+    }
+    renderIssues();
 }
 
-function handleIssueLocationFilter(value) {
-    issueLocationFilter = value;
-    updateIssueList();
+function handleIssueLocationFilterChange(value, isChecked) {
+    if (isChecked) {
+        if (!issueLocationFilters.includes(value)) {
+            issueLocationFilters.push(value);
+        }
+    } else {
+        issueLocationFilters = issueLocationFilters.filter(v => v !== value);
+    }
+    renderIssues();
 }
 
-function handleIssueCategoryFilter(value) {
-    issueCategoryFilter = value;
-    updateIssueList();
+function handleIssueCategoryFilterChange(value, isChecked) {
+    if (isChecked) {
+        if (!issueCategoryFilters.includes(value)) {
+            issueCategoryFilters.push(value);
+        }
+    } else {
+        issueCategoryFilters = issueCategoryFilters.filter(v => v !== value);
+    }
+    renderIssues();
 }
 
 function clearIssueFilters() {
     issueSearchQuery = '';
-    issueStatusFilter = 'all';
-    issueSeverityFilter = 'all';
-    issueLocationFilter = 'all';
-    issueCategoryFilter = 'all';
+    issueStatusFilters = [];
+    issueSeverityFilters = [];
+    issueLocationFilters = [];
+    issueCategoryFilters = [];
     renderIssues();
 }
 

@@ -508,14 +508,28 @@ def get_engineer_for_user():
 
 
 def can_edit_project(project_id):
-    """Check if current user can edit a project (owner or admin)."""
+    """Check if current user can edit a project (owner, milestone assignee, or admin)."""
     if is_admin():
         return True
     eng = get_engineer_for_user()
     if not eng:
         return False
     project = Project.query.get(project_id)
-    return project and project.owner_id == eng.id
+    if not project:
+        return False
+    # Owner can edit
+    if project.owner_id == eng.id:
+        return True
+    # Engineers assigned to any milestone in this project can edit
+    milestone_ids = [m.id for m in project.milestones]
+    if milestone_ids:
+        assigned = MilestoneAssignment.query.filter(
+            MilestoneAssignment.milestone_id.in_(milestone_ids),
+            MilestoneAssignment.engineer_id == eng.id
+        ).first()
+        if assigned:
+            return True
+    return False
 
 
 def is_assigned_to_project(project_id, engineer_id):
