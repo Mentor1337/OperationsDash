@@ -453,6 +453,103 @@ class ParkingLotItem(db.Model):
 
 
 # ============================================================================
+# KPI Scorecard Models
+# ============================================================================
+
+class Metric(db.Model):
+    """KPI metric definition (e.g., 'Milestones', 'Positive weld yield')."""
+    __tablename__ = 'metrics'
+    id = db.Column(db.Integer, primary_key=True)
+    metric_id = db.Column(db.String(50), unique=True, nullable=False)  # e.g., "milestones", "pos_weld"
+    name = db.Column(db.String(200), nullable=False)
+    unit = db.Column(db.String(50))  # e.g., "FPY", "seconds", "headcount"
+    uom = db.Column(db.String(20))   # pct, dec, count, sec, min, hr, usd, none
+    direction = db.Column(db.String(10), default='up')  # "up" or "down"
+    description = db.Column(db.Text)
+    slide_label = db.Column(db.String(100))  # Short label for PowerPoint slides
+    parent_id = db.Column(db.Integer, db.ForeignKey('metrics.id'), nullable=True)
+    calc_method = db.Column(db.String(20))  # pct, product, sum, avg (for feeder rollup)
+    sort_order = db.Column(db.Integer, default=0)
+
+    # Relationships
+    parent = db.relationship('Metric', remote_side=[id], backref='children')
+    values = db.relationship('MetricValue', backref='metric', cascade='all, delete-orphan', lazy='dynamic')
+    comments = db.relationship('MetricComment', backref='metric', cascade='all, delete-orphan', lazy='dynamic')
+
+    def to_dict(self, include_values=False, include_comments=False):
+        data = {
+            'id': self.id,
+            'metricId': self.metric_id,
+            'name': self.name,
+            'unit': self.unit,
+            'uom': self.uom,
+            'direction': self.direction,
+            'description': self.description,
+            'slideLabel': self.slide_label,
+            'parentId': self.parent_id,
+            'calcMethod': self.calc_method,
+            'sortOrder': self.sort_order
+        }
+        if include_values:
+            data['values'] = {v.year_month: {'target': v.target, 'actual': v.actual} for v in self.values}
+        if include_comments:
+            data['comments'] = {}
+            for c in self.comments:
+                key = c.year_month
+                if key not in data['comments']:
+                    data['comments'][key] = []
+                data['comments'][key].append({
+                    'id': c.id,
+                    'author': c.author,
+                    'createdAt': c.created_at.isoformat() if c.created_at else None,
+                    'text': c.text
+                })
+        return data
+
+
+class MetricValue(db.Model):
+    """Monthly target and actual values for a KPI metric."""
+    __tablename__ = 'metric_values'
+    id = db.Column(db.Integer, primary_key=True)
+    metric_id = db.Column(db.Integer, db.ForeignKey('metrics.id'), nullable=False)
+    year_month = db.Column(db.String(7), nullable=False)  # "2026-09"
+    target = db.Column(db.Float)
+    actual = db.Column(db.Float)
+
+    __table_args__ = (db.UniqueConstraint('metric_id', 'year_month', name='uq_metric_value'),)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'metricId': self.metric_id,
+            'yearMonth': self.year_month,
+            'target': self.target,
+            'actual': self.actual
+        }
+
+
+class MetricComment(db.Model):
+    """Comments on KPI metrics for a specific month."""
+    __tablename__ = 'metric_comments'
+    id = db.Column(db.Integer, primary_key=True)
+    metric_id = db.Column(db.Integer, db.ForeignKey('metrics.id'), nullable=False)
+    year_month = db.Column(db.String(7), nullable=False)  # "2026-09"
+    author = db.Column(db.String(100))
+    created_at = db.Column(db.Date, default=date.today)
+    text = db.Column(db.Text, nullable=False)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'metricId': self.metric_id,
+            'yearMonth': self.year_month,
+            'author': self.author,
+            'createdAt': self.created_at.isoformat() if self.created_at else None,
+            'text': self.text
+        }
+
+
+# ============================================================================
 # Auth Helpers
 # ============================================================================
 
@@ -1953,6 +2050,191 @@ def delete_parking_lot_item(id):
     db.session.delete(item)
     db.session.commit()
     return '', 204
+
+
+# ============================================================================
+# API Routes - KPI Scorecard
+# ============================================================================
+
+@app.route('/api/kpis', methods=['GET'])
+def get_kpis():
+    """Get all KPI metrics with their values and comments."""
+    metrics = Metric.query.order_by(Metric.sort_order).all()
+    return jsonify([m.to_dict(include_values=True, include_comments=True) for m in metrics])
+
+
+@app.route('/api/kpis', methods=['POST'])
+@login_required
+def create_kpi():
+    """Create a new KPI metric."""
+    data = request.get_json()
+
+    # Generate unique metric_id if not provided
+    metric_id = data.get('metricId') or f"kpi_{int(datetime.utcnow().timestamp())}"
+
+    # Check for duplicate metric_id
+    if Metric.query.filter_by(metric_id=metric_id).first():
+        return jsonify({'error': 'Metric ID already exists'}), 400
+
+    metric = Metric(
+        metric_id=metric_id,
+        name=data.get('name'),
+        unit=data.get('unit'),
+        uom=data.get('uom', 'pct'),
+        direction=data.get('direction', 'up'),
+        description=data.get('description'),
+        slide_label=data.get('slideLabel'),
+        parent_id=data.get('parentId'),
+        calc_method=data.get('calcMethod'),
+        sort_order=data.get('sortOrder', 0)
+    )
+
+    db.session.add(metric)
+    db.session.commit()
+
+    # Add initial values if provided
+    initial_values = data.get('values', {})
+    for year_month, vals in initial_values.items():
+        value = MetricValue(
+            metric_id=metric.id,
+            year_month=year_month,
+            target=vals.get('target'),
+            actual=vals.get('actual')
+        )
+        db.session.add(value)
+
+    db.session.commit()
+
+    logger.info(f"KPI '{metric.name}' created by {session.get('username')}")
+    return jsonify(metric.to_dict(include_values=True, include_comments=True)), 201
+
+
+@app.route('/api/kpis/<int:id>', methods=['PUT'])
+@login_required
+def update_kpi(id):
+    """Update a KPI metric."""
+    metric = Metric.query.get_or_404(id)
+    data = request.get_json()
+
+    # Update fields
+    if 'name' in data:
+        metric.name = data['name']
+    if 'unit' in data:
+        metric.unit = data['unit']
+    if 'uom' in data:
+        metric.uom = data['uom']
+    if 'direction' in data:
+        metric.direction = data['direction']
+    if 'description' in data:
+        metric.description = data['description']
+    if 'slideLabel' in data:
+        metric.slide_label = data['slideLabel']
+    if 'parentId' in data:
+        metric.parent_id = data['parentId']
+    if 'calcMethod' in data:
+        metric.calc_method = data['calcMethod']
+    if 'sortOrder' in data:
+        metric.sort_order = data['sortOrder']
+
+    db.session.commit()
+
+    logger.info(f"KPI '{metric.name}' updated by {session.get('username')}")
+    return jsonify(metric.to_dict(include_values=True, include_comments=True))
+
+
+@app.route('/api/kpis/<int:id>', methods=['DELETE'])
+@login_required
+def delete_kpi(id):
+    """Delete a KPI metric and all its values and comments."""
+    metric = Metric.query.get_or_404(id)
+    name = metric.name
+    db.session.delete(metric)
+    db.session.commit()
+
+    logger.info(f"KPI '{name}' deleted by {session.get('username')}")
+    return '', 204
+
+
+@app.route('/api/kpis/<int:id>/values', methods=['PUT'])
+@login_required
+def update_kpi_value(id):
+    """Update or create a target/actual value for a specific month."""
+    metric = Metric.query.get_or_404(id)
+    data = request.get_json()
+
+    year_month = data.get('yearMonth')
+    if not year_month:
+        return jsonify({'error': 'yearMonth is required'}), 400
+
+    # Find or create the value record
+    value = MetricValue.query.filter_by(metric_id=id, year_month=year_month).first()
+
+    if not value:
+        value = MetricValue(metric_id=id, year_month=year_month)
+        db.session.add(value)
+
+    # Update target and/or actual
+    if 'target' in data:
+        value.target = data['target']
+    if 'actual' in data:
+        value.actual = data['actual']
+
+    db.session.commit()
+
+    return jsonify(value.to_dict())
+
+
+@app.route('/api/kpis/<int:id>/comments', methods=['POST'])
+@login_required
+def add_kpi_comment(id):
+    """Add a comment to a KPI for a specific month."""
+    metric = Metric.query.get_or_404(id)
+    data = request.get_json()
+
+    year_month = data.get('yearMonth')
+    text = data.get('text')
+
+    if not year_month or not text:
+        return jsonify({'error': 'yearMonth and text are required'}), 400
+
+    comment = MetricComment(
+        metric_id=id,
+        year_month=year_month,
+        author=data.get('author') or session.get('username'),
+        text=text
+    )
+
+    db.session.add(comment)
+    db.session.commit()
+
+    return jsonify(comment.to_dict()), 201
+
+
+@app.route('/api/kpis/<int:id>/comments/<int:comment_id>', methods=['DELETE'])
+@login_required
+def delete_kpi_comment(id, comment_id):
+    """Delete a comment from a KPI."""
+    comment = MetricComment.query.filter_by(id=comment_id, metric_id=id).first_or_404()
+    db.session.delete(comment)
+    db.session.commit()
+
+    return '', 204
+
+
+@app.route('/api/kpis/reorder', methods=['PUT'])
+@login_required
+def reorder_kpis():
+    """Update the sort order of KPIs."""
+    data = request.get_json()
+    orders = data.get('orders', [])  # List of {id, sortOrder}
+
+    for item in orders:
+        metric = Metric.query.get(item['id'])
+        if metric:
+            metric.sort_order = item['sortOrder']
+
+    db.session.commit()
+    return jsonify({'success': True})
 
 
 # ============================================================================

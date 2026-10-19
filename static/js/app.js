@@ -205,6 +205,7 @@ function renderCurrentTab() {
         case 'budget': renderBudget(); break;
         case 'issues': renderIssues(); break;
         case 'parking-lot': renderParkingLot(); break;
+        case 'kpis': renderKPIs(); break;
     }
 }
 
@@ -4629,4 +4630,943 @@ async function deleteParkingLotItem(id) {
         showToast('Failed to delete item', 'error');
         console.error(err);
     }
+}
+
+// ============================================================================
+// KPI Scorecard Tab
+// ============================================================================
+
+// KPI State
+let kpiMetrics = [];
+let kpiView = 'table'; // 'table' or 'chart'
+let kpiChartInstance = null;
+let kpiCollapsed = {};
+const KPI_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const KPI_CUR_Y = new Date().getFullYear();
+const KPI_CUR_M = new Date().getMonth();
+
+// KPI Date range
+let kpiRange = { y1: KPI_CUR_Y, m1: 0, y2: KPI_CUR_Y, m2: 11 };
+let kpiPreset = 'year';
+let kpiSel = { metricId: null, key: null }; // Selected cell
+
+// KPI Units of Measure
+const KPI_UOM = {
+    pct: { label: 'Percent (%)', suf: '%' },
+    dec: { label: 'Decimal (0-1)', suf: '' },
+    count: { label: 'Count', suf: '' },
+    hc: { label: 'Headcount', suf: '' },
+    min: { label: 'Minutes', suf: ' min' },
+    sec: { label: 'Seconds', suf: ' s' },
+    hr: { label: 'Hours', suf: ' h' },
+    usd: { label: 'Dollars ($)', pre: '$', suf: '' },
+    none: { label: 'Other / none', suf: '' }
+};
+
+// KPI Calculation methods
+const KPI_CALC = {
+    pct: { label: 'Rolled yield (multiply yields)', sym: '×' },
+    product: { label: 'Multiply', sym: '×' },
+    sum: { label: 'Add', sym: '+' },
+    avg: { label: 'Average', sym: ',' }
+};
+
+// Helper: month key (e.g., "2026-09")
+function kpiMkey(y, m) {
+    return `${y}-${String(m + 1).padStart(2, '0')}`;
+}
+
+// Helper: parse key to {y, m}
+function kpiParseKey(k) {
+    const [y, m] = k.split('-').map(Number);
+    return { y, m: m - 1 };
+}
+
+// Helper: key label (e.g., "Sep 2026")
+function kpiKeyLabel(k, short) {
+    const { y, m } = kpiParseKey(k);
+    return short ? `${KPI_MONTHS[m]} '${String(y).slice(2)}` : `${KPI_MONTHS[m]} ${y}`;
+}
+
+// Helper: get keys between two dates
+function kpiKeysBetween(y1, m1, y2, m2) {
+    const keys = [];
+    let y = y1, m = m1;
+    while (y < y2 || (y === y2 && m <= m2)) {
+        keys.push(kpiMkey(y, m));
+        m++;
+        if (m > 11) { m = 0; y++; }
+    }
+    return keys;
+}
+
+// Helper: get keys for current range
+function kpiRangeKeys() {
+    return kpiKeysBetween(kpiRange.y1, kpiRange.m1, kpiRange.y2, kpiRange.m2);
+}
+
+// Helper: format number
+function kpiFmt(v) {
+    return v == null || v === '' ? '–' : (Math.round(v * 100) / 100).toLocaleString('en-US');
+}
+
+// Helper: format with unit
+function kpiFmtU(met, v) {
+    if (v == null || v === '') return '–';
+    const uom = KPI_UOM[met.uom] || KPI_UOM.none;
+    return (uom.pre || '') + kpiFmt(v) + (uom.suf || '');
+}
+
+// Helper: get metric by id
+function kpiGetMetric(id) {
+    return kpiMetrics.find(m => m.id === id);
+}
+
+// Helper: get feeders of a metric
+function kpiFeedersOf(id) {
+    return kpiMetrics.filter(m => m.parentId === id);
+}
+
+// Helper: get value for metric and month
+function kpiGetValue(met, k) {
+    const v = met.values?.[k] || { target: null, actual: null };
+    // Check if this is calculated from feeders
+    const ci = kpiCalcInfo(met, k);
+    if (ci && ci.ready) {
+        return { target: v.target, actual: ci.value, calc: true, manual: v.actual };
+    }
+    return { target: v.target, actual: v.actual, calc: false };
+}
+
+// Helper: get status (hit/miss/empty)
+function kpiStatus(met, k) {
+    const v = kpiGetValue(met, k);
+    if (v.actual == null || v.target == null) return 'empty';
+    return met.direction === 'up' ? (v.actual >= v.target ? 'hit' : 'miss') : (v.actual <= v.target ? 'hit' : 'miss');
+}
+
+// Helper: calculate rolled up value from feeders
+function kpiCalcInfo(met, k) {
+    const fs = kpiFeedersOf(met.id);
+    if (!fs.length) return null;
+
+    const method = met.calcMethod || 'pct';
+    const parts = fs.map(f => {
+        const raw = f.values?.[k]?.actual;
+        return { met: f, raw, a: raw };
+    });
+
+    const ready = parts.every(p => p.a != null);
+    if (!ready) return { method, parts, ready: false, value: null };
+
+    let value;
+    const vals = parts.map(p => p.a);
+    switch (method) {
+        case 'pct':
+            value = vals.reduce((p, v) => p * (v / 100), 1) * 100;
+            break;
+        case 'product':
+            value = vals.reduce((p, v) => p * v, 1);
+            break;
+        case 'sum':
+            value = vals.reduce((p, v) => p + v, 0);
+            break;
+        case 'avg':
+            value = vals.reduce((p, v) => p + v, 0) / vals.length;
+            break;
+        default:
+            value = null;
+    }
+
+    return { method, parts, ready: true, value };
+}
+
+// Helper: get comments for metric and month
+function kpiGetComments(met, k) {
+    return met.comments?.[k] || [];
+}
+
+// Load KPI data from API
+async function loadKPIs() {
+    try {
+        const response = await fetch(`${API}/api/kpis`);
+        if (!response.ok) throw new Error('Failed to load KPIs');
+        kpiMetrics = await response.json();
+
+        // Set initial selection if none
+        if (!kpiSel.metricId && kpiMetrics.length > 0) {
+            kpiSel.metricId = kpiMetrics[0].id;
+            kpiSel.key = kpiMkey(KPI_CUR_Y, KPI_CUR_M);
+        }
+    } catch (err) {
+        console.error('Failed to load KPIs:', err);
+        kpiMetrics = [];
+    }
+}
+
+// Render KPIs tab
+async function renderKPIs() {
+    const container = document.getElementById('content-kpis');
+
+    // Load data if not loaded
+    if (kpiMetrics.length === 0) {
+        container.innerHTML = '<div class="text-center py-8 text-gray-500">Loading KPIs...</div>';
+        await loadKPIs();
+    }
+
+    const keys = kpiRangeKeys();
+
+    // Ensure selection is in range
+    if (!keys.includes(kpiSel.key)) {
+        const today = kpiMkey(KPI_CUR_Y, KPI_CUR_M);
+        kpiSel.key = keys.includes(today) ? today : keys[keys.length - 1];
+    }
+
+    container.innerHTML = `
+        <div class="mb-4 flex flex-wrap items-center justify-between gap-4">
+            <h2 class="text-xl font-bold">KPI Scorecard</h2>
+            <div class="flex items-center gap-3">
+                <div class="kpi-view-toggle">
+                    <button onclick="setKPIView('table')" class="${kpiView === 'table' ? 'active' : ''}">Table</button>
+                    <button onclick="setKPIView('chart')" class="${kpiView === 'chart' ? 'active' : ''}">Graph</button>
+                </div>
+                ${authState.authenticated ? `
+                <button onclick="openKPIDialog()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                    Add KPI
+                </button>
+                ` : ''}
+                <button onclick="exportKPIsCSV()" class="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">
+                    Export CSV
+                </button>
+            </div>
+        </div>
+
+        <!-- Filter Bar -->
+        <div class="kpi-filterbar">
+            <div class="kpi-filter-group">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">From</label>
+                    <select id="kpi-m1" onchange="onKPIRangeChange()" class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+                        ${KPI_MONTHS.map((n, i) => `<option value="${i}" ${i === kpiRange.m1 ? 'selected' : ''}>${n}</option>`).join('')}
+                    </select>
+                </div>
+                <div>
+                    <select id="kpi-y1" onchange="onKPIRangeChange()" class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+                        ${kpiYearList().map(y => `<option value="${y}" ${y === kpiRange.y1 ? 'selected' : ''}>${y}</option>`).join('')}
+                    </select>
+                </div>
+            </div>
+            <span class="kpi-to">to</span>
+            <div class="kpi-filter-group">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">To</label>
+                    <select id="kpi-m2" onchange="onKPIRangeChange()" class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+                        ${KPI_MONTHS.map((n, i) => `<option value="${i}" ${i === kpiRange.m2 ? 'selected' : ''}>${n}</option>`).join('')}
+                    </select>
+                </div>
+                <div>
+                    <select id="kpi-y2" onchange="onKPIRangeChange()" class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+                        ${kpiYearList().map(y => `<option value="${y}" ${y === kpiRange.y2 ? 'selected' : ''}>${y}</option>`).join('')}
+                    </select>
+                </div>
+            </div>
+            <div class="kpi-presets">
+                <button onclick="applyKPIPreset('year')" class="px-3 py-2 border border-gray-300 rounded-lg ${kpiPreset === 'year' ? 'active' : ''}">This Year</button>
+                <button onclick="applyKPIPreset('ytd')" class="px-3 py-2 border border-gray-300 rounded-lg ${kpiPreset === 'ytd' ? 'active' : ''}">YTD</button>
+                <button onclick="applyKPIPreset('l12')" class="px-3 py-2 border border-gray-300 rounded-lg ${kpiPreset === 'l12' ? 'active' : ''}">Last 12 Mo</button>
+            </div>
+            <span class="kpi-count">${keys.length} month${keys.length === 1 ? '' : 's'} shown</span>
+        </div>
+
+        <!-- Legend -->
+        <div class="kpi-legend">
+            <span><i class="kpi-swatch" style="background:#e4f4ea;border:1px solid #1f8a4c"></i>Meets target</span>
+            <span><i class="kpi-swatch" style="background:#fbe7e4;border:1px solid #c23b2f"></i>Misses target</span>
+            <span><i class="kpi-swatch" style="background:#f0f2f6;border:1px solid #dde3ec"></i>No actual yet</span>
+            <span><b style="color:#c98a00">●</b> Has comments</span>
+        </div>
+
+        <!-- Main Content -->
+        <div class="kpi-layout">
+            <div id="kpi-main-content">
+                ${kpiView === 'table' ? renderKPITable() : renderKPIChart()}
+            </div>
+            <div id="kpi-side-panel">
+                ${renderKPISidePanel()}
+            </div>
+        </div>
+    `;
+}
+
+// Get list of years with data
+function kpiYearList() {
+    let lo = KPI_CUR_Y - 2, hi = KPI_CUR_Y + 2;
+    kpiMetrics.forEach(m => {
+        Object.keys(m.values || {}).forEach(k => {
+            const y = kpiParseKey(k).y;
+            lo = Math.min(lo, y);
+            hi = Math.max(hi, y);
+        });
+    });
+    const ys = [];
+    for (let y = lo; y <= hi; y++) ys.push(y);
+    return ys;
+}
+
+// Render KPI table
+function renderKPITable() {
+    const keys = kpiRangeKeys();
+
+    if (kpiMetrics.length === 0) {
+        return `
+            <div class="kpi-table-wrap p-8 text-center text-gray-500">
+                No KPIs configured yet.
+                ${authState.authenticated ? '<br><br><button onclick="openKPIDialog()" class="px-4 py-2 bg-blue-600 text-white rounded-lg">Add your first KPI</button>' : ''}
+            </div>
+        `;
+    }
+
+    // Group months by year for headers
+    const years = [];
+    keys.forEach(k => {
+        const y = kpiParseKey(k).y;
+        const last = years[years.length - 1];
+        if (last && last.y === y) last.n++;
+        else years.push({ y, n: 1 });
+    });
+
+    let html = `
+        <div class="kpi-table-wrap">
+            <table class="kpi-table">
+                <thead>
+                    <tr class="kpi-yr">
+                        <th class="kpi-metric" rowspan="2" style="vertical-align:bottom">Metric</th>
+                        ${years.map(y => `<th colspan="${y.n}">${y.y}</th>`).join('')}
+                    </tr>
+                    <tr class="kpi-mo">
+                        ${keys.map(k => `<th>${KPI_MONTHS[kpiParseKey(k).m]}</th>`).join('')}
+                    </tr>
+                </thead>
+                <tbody>
+    `;
+
+    kpiMetrics.forEach(met => {
+        // Skip feeders if parent is collapsed
+        if (met.parentId && kpiCollapsed[met.parentId]) return;
+
+        const feeders = kpiFeedersOf(met.id);
+        const isOpen = !kpiCollapsed[met.id];
+        const foldBtn = feeders.length ? `
+            <button class="kpi-fold" onclick="toggleKPICollapse(${met.id})">
+                ${isOpen ? '▾ Hide' : '▸ Show'} ${feeders.length} feeder${feeders.length > 1 ? 's' : ''}
+            </button>
+        ` : '';
+
+        const isFeeder = met.parentId && kpiGetMetric(met.parentId);
+        const unitLabel = met.unit || (KPI_UOM[met.uom] || KPI_UOM.none).label;
+
+        html += `
+            <tr class="${isFeeder ? 'kpi-feeder' : ''}">
+                <td class="kpi-metric" style="position:relative">
+                    <span class="kpi-name" onclick="selectKPIMetric(${met.id})">${escapeHtml(met.name)}</span>
+                    <span class="kpi-dir">${escapeHtml(unitLabel)} · ${met.direction === 'up' ? 'higher is better' : 'at or below target'}</span>
+                    ${foldBtn}
+                </td>
+        `;
+
+        keys.forEach(k => {
+            const v = kpiGetValue(met, k);
+            const st = kpiStatus(met, k);
+            const comments = kpiGetComments(met, k);
+            const isSel = kpiSel.metricId === met.id && kpiSel.key === k;
+
+            html += `
+                <td class="kpi-cell kpi-${st}${isSel ? ' kpi-selected' : ''}"
+                    onclick="selectKPICell(${met.id}, '${k}')"
+                    tabindex="0">
+                    ${v.calc ? '<span class="kpi-fx">ƒ</span>' : ''}
+                    ${comments.length ? `<span class="kpi-flag">${comments.length}</span>` : ''}
+                    <span class="kpi-actual">${kpiFmtU(met, v.actual)}</span>
+                    <span class="kpi-target">T ${kpiFmtU(met, v.target)}</span>
+                </td>
+            `;
+        });
+
+        html += '</tr>';
+    });
+
+    html += '</tbody></table></div>';
+    return html;
+}
+
+// Render KPI chart view
+function renderKPIChart() {
+    const met = kpiGetMetric(kpiSel.metricId);
+    if (!met) {
+        return '<div class="p-8 text-center text-gray-500">Select a KPI to view its trend chart.</div>';
+    }
+
+    return `
+        <div class="bg-white border border-gray-200 rounded-lg p-4">
+            <div class="flex flex-wrap items-center justify-between gap-4 mb-4 pb-4 border-b">
+                <div>
+                    <select id="kpi-chart-select" onchange="onKPIChartSelect(this.value)" class="px-3 py-2 border border-gray-300 rounded-lg">
+                        ${kpiMetrics.map(m => `<option value="${m.id}" ${m.id === kpiSel.metricId ? 'selected' : ''}>${m.parentId ? '↳ ' : ''}${escapeHtml(m.name)}</option>`).join('')}
+                    </select>
+                </div>
+            </div>
+            <div class="kpi-chart-container">
+                <canvas id="kpi-chart-canvas"></canvas>
+            </div>
+            <p class="text-sm text-gray-500 mt-2">Point color shows hit/miss. Click a point to view that month.</p>
+        </div>
+    `;
+}
+
+// Initialize chart after render
+function initKPIChart() {
+    const canvas = document.getElementById('kpi-chart-canvas');
+    if (!canvas) return;
+
+    const met = kpiGetMetric(kpiSel.metricId);
+    if (!met) return;
+
+    const keys = kpiRangeKeys();
+    const multiYear = kpiRange.y1 !== kpiRange.y2;
+
+    const actuals = keys.map(k => kpiGetValue(met, k).actual);
+    const targets = keys.map(k => kpiGetValue(met, k).target);
+    const statuses = keys.map(k => kpiStatus(met, k));
+    const hasComments = keys.map(k => kpiGetComments(met, k).length > 0);
+
+    const ptColors = statuses.map(s => s === 'hit' ? '#1f8a4c' : s === 'miss' ? '#c23b2f' : '#5d6b80');
+    const ptBorder = hasComments.map(c => c ? '#c98a00' : 'transparent');
+
+    if (kpiChartInstance) {
+        kpiChartInstance.destroy();
+    }
+
+    kpiChartInstance = new Chart(canvas, {
+        type: 'line',
+        data: {
+            labels: keys.map(k => multiYear ? kpiKeyLabel(k, true) : KPI_MONTHS[kpiParseKey(k).m]),
+            datasets: [
+                {
+                    label: 'Actual',
+                    data: actuals,
+                    borderColor: '#2f6fde',
+                    pointBackgroundColor: ptColors,
+                    pointBorderColor: ptBorder,
+                    pointBorderWidth: 3,
+                    pointRadius: hasComments.map(c => c ? 8 : 5),
+                    pointHoverRadius: 9,
+                    borderWidth: 2.5,
+                    tension: 0.2,
+                    spanGaps: false
+                },
+                {
+                    label: 'Target',
+                    data: targets,
+                    borderColor: '#9ca3af',
+                    borderDash: [6, 5],
+                    pointRadius: 0,
+                    borderWidth: 2,
+                    stepped: 'middle',
+                    spanGaps: false
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: { labels: { color: '#1b2333' } },
+                tooltip: {
+                    callbacks: {
+                        title: items => kpiKeyLabel(keys[items[0].dataIndex]),
+                        afterBody: items => {
+                            const k = keys[items[0].dataIndex];
+                            const comments = kpiGetComments(met, k);
+                            return comments.map(c => '💬 ' + c.text);
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: { ticks: { color: '#5d6b80', autoSkip: true, maxRotation: 0 }, grid: { display: false } },
+                y: {
+                    ticks: { color: '#5d6b80' },
+                    grid: { color: '#dde3ec' },
+                    title: { display: true, text: met.unit || '', color: '#5d6b80' }
+                }
+            },
+            onClick: (e, els) => {
+                if (els.length) {
+                    selectKPICell(met.id, keys[els[0].index]);
+                }
+            }
+        }
+    });
+}
+
+// Render side panel
+function renderKPISidePanel() {
+    const met = kpiGetMetric(kpiSel.metricId);
+    if (!met) {
+        return `
+            <div class="kpi-side-panel">
+                <p class="text-gray-500">Select a KPI cell to view and edit details.</p>
+            </div>
+        `;
+    }
+
+    const k = kpiSel.key;
+    const v = kpiGetValue(met, k);
+    const st = kpiStatus(met, k);
+    const comments = kpiGetComments(met, k);
+    const unitLabel = met.unit || (KPI_UOM[met.uom] || KPI_UOM.none).label;
+
+    const stText = st === 'hit' ? 'Meets target' : st === 'miss' ? 'Misses target' : 'No actual entered';
+
+    return `
+        <div class="kpi-side-panel">
+            <div class="flex justify-between items-start mb-2">
+                <h2 class="text-lg font-bold">${escapeHtml(met.name)}</h2>
+                ${authState.authenticated ? `<button class="kpi-linkbtn" onclick="openKPIDialog(${met.id})">Edit KPI</button>` : ''}
+            </div>
+            <div class="kpi-context">${kpiKeyLabel(k)} · ${escapeHtml(unitLabel)}</div>
+
+            ${v.calc ? renderKPICalcBox(met, k) : ''}
+
+            <div class="kpi-vals-grid">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Target</label>
+                    <input type="number" step="any" id="kpi-target-input" value="${v.target ?? ''}"
+                        onchange="updateKPIValue(${met.id}, '${k}', 'target', this.value)"
+                        class="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                        ${!authState.authenticated ? 'disabled' : ''}>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">${v.calc ? 'Actual (calculated)' : 'Actual'}</label>
+                    <input type="number" step="any" id="kpi-actual-input" value="${v.actual != null ? Math.round(v.actual * 100) / 100 : ''}"
+                        onchange="updateKPIValue(${met.id}, '${k}', 'actual', this.value)"
+                        class="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                        ${v.calc || !authState.authenticated ? 'disabled' : ''}>
+                </div>
+            </div>
+
+            <div class="kpi-status kpi-${st}">${stText}</div>
+
+            <h3 class="text-sm font-medium text-gray-700 mb-2">Comments</h3>
+            ${comments.length ? `
+                <ul class="kpi-comments">
+                    ${comments.map((c, i) => `
+                        <li>
+                            <div class="kpi-meta">
+                                <span>${escapeHtml(c.author || '')}${c.author ? ' · ' : ''}${c.createdAt || ''}</span>
+                                ${authState.authenticated ? `<button class="kpi-delete" onclick="deleteKPIComment(${met.id}, ${c.id})">Delete</button>` : ''}
+                            </div>
+                            ${escapeHtml(c.text)}
+                        </li>
+                    `).join('')}
+                </ul>
+            ` : '<p class="text-sm text-gray-500 mb-3">No comments for this month yet.</p>'}
+
+            ${authState.authenticated ? `
+                <div class="space-y-2">
+                    <input type="text" id="kpi-comment-author" placeholder="Initials or team (optional)"
+                        class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                    <textarea id="kpi-comment-text" placeholder="Add a comment..." rows="3"
+                        class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"></textarea>
+                    <button onclick="addKPIComment(${met.id}, '${k}')" class="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                        Add Comment
+                    </button>
+                </div>
+            ` : ''}
+        </div>
+    `;
+}
+
+// Render calculation info box
+function renderKPICalcBox(met, k) {
+    const ci = kpiCalcInfo(met, k);
+    if (!ci) return '';
+
+    const method = KPI_CALC[ci.method] || KPI_CALC.pct;
+    const parts = ci.parts.map(p => `${escapeHtml(p.met.name)} ${kpiFmtU(p.met, p.a)}`);
+    const eq = ci.method === 'avg' ? `average(${parts.join(', ')})` : parts.join(` ${method.sym} `);
+
+    return `
+        <div class="kpi-calcbox">
+            <div class="kpi-calc-title">Calculated from feeders · ${method.label}</div>
+            <div class="kpi-calc-eq">${eq} = ${ci.ready ? `<b>${kpiFmtU(met, ci.value)}</b>` : '?'}</div>
+            ${!ci.ready ? `<div class="kpi-calc-wait">Waiting on feeder actuals.</div>` : ''}
+        </div>
+    `;
+}
+
+// Event handlers
+function setKPIView(view) {
+    kpiView = view;
+    renderKPIs();
+    if (view === 'chart') {
+        setTimeout(initKPIChart, 100);
+    }
+}
+
+function selectKPICell(metricId, key) {
+    kpiSel.metricId = metricId;
+    kpiSel.key = key;
+
+    // Update table selection
+    document.querySelectorAll('.kpi-cell.kpi-selected').forEach(el => el.classList.remove('kpi-selected'));
+    const cell = document.querySelector(`.kpi-cell[onclick*="${metricId}, '${key}'"]`);
+    if (cell) cell.classList.add('kpi-selected');
+
+    // Update side panel
+    document.getElementById('kpi-side-panel').innerHTML = renderKPISidePanel();
+}
+
+function selectKPIMetric(id) {
+    kpiSel.metricId = id;
+    document.getElementById('kpi-side-panel').innerHTML = renderKPISidePanel();
+}
+
+function toggleKPICollapse(id) {
+    kpiCollapsed[id] = !kpiCollapsed[id];
+    document.getElementById('kpi-main-content').innerHTML = kpiView === 'table' ? renderKPITable() : renderKPIChart();
+}
+
+function onKPIChartSelect(id) {
+    kpiSel.metricId = parseInt(id);
+    initKPIChart();
+    document.getElementById('kpi-side-panel').innerHTML = renderKPISidePanel();
+}
+
+function applyKPIPreset(p) {
+    kpiPreset = p;
+    if (p === 'year') kpiRange = { y1: KPI_CUR_Y, m1: 0, y2: KPI_CUR_Y, m2: 11 };
+    if (p === 'ytd') kpiRange = { y1: KPI_CUR_Y, m1: 0, y2: KPI_CUR_Y, m2: KPI_CUR_M };
+    if (p === 'l12') {
+        let m = KPI_CUR_M - 11, y = KPI_CUR_Y;
+        while (m < 0) { m += 12; y--; }
+        kpiRange = { y1: y, m1: m, y2: KPI_CUR_Y, m2: KPI_CUR_M };
+    }
+    renderKPIs();
+    if (kpiView === 'chart') setTimeout(initKPIChart, 100);
+}
+
+function onKPIRangeChange() {
+    const y1 = parseInt(document.getElementById('kpi-y1').value);
+    const m1 = parseInt(document.getElementById('kpi-m1').value);
+    const y2 = parseInt(document.getElementById('kpi-y2').value);
+    const m2 = parseInt(document.getElementById('kpi-m2').value);
+
+    // Validate range
+    if (y1 > y2 || (y1 === y2 && m1 > m2)) {
+        showToast('Invalid date range', 'error');
+        return;
+    }
+
+    kpiRange = { y1, m1, y2, m2 };
+    kpiPreset = 'custom';
+    renderKPIs();
+    if (kpiView === 'chart') setTimeout(initKPIChart, 100);
+}
+
+// CRUD operations
+async function updateKPIValue(metricId, yearMonth, field, value) {
+    try {
+        const data = { yearMonth };
+        data[field] = value === '' ? null : parseFloat(value);
+
+        const response = await fetch(`${API}/api/kpis/${metricId}/values`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+
+        if (await handleApiError(response)) return;
+        if (!response.ok) throw new Error('Failed to update value');
+
+        // Update local state
+        const met = kpiGetMetric(metricId);
+        if (!met.values) met.values = {};
+        if (!met.values[yearMonth]) met.values[yearMonth] = {};
+        met.values[yearMonth][field] = data[field];
+
+        // Re-render
+        document.getElementById('kpi-main-content').innerHTML = kpiView === 'table' ? renderKPITable() : renderKPIChart();
+        document.getElementById('kpi-side-panel').innerHTML = renderKPISidePanel();
+        if (kpiView === 'chart') setTimeout(initKPIChart, 100);
+
+        showToast('Value updated', 'success');
+    } catch (err) {
+        showToast('Failed to update value', 'error');
+        console.error(err);
+    }
+}
+
+async function addKPIComment(metricId, yearMonth) {
+    const textEl = document.getElementById('kpi-comment-text');
+    const authorEl = document.getElementById('kpi-comment-author');
+    const text = textEl?.value.trim();
+
+    if (!text) {
+        textEl?.focus();
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API}/api/kpis/${metricId}/comments`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                yearMonth,
+                text,
+                author: authorEl?.value.trim() || null
+            })
+        });
+
+        if (await handleApiError(response)) return;
+        if (!response.ok) throw new Error('Failed to add comment');
+
+        const comment = await response.json();
+
+        // Update local state
+        const met = kpiGetMetric(metricId);
+        if (!met.comments) met.comments = {};
+        if (!met.comments[yearMonth]) met.comments[yearMonth] = [];
+        met.comments[yearMonth].push(comment);
+
+        // Re-render
+        document.getElementById('kpi-main-content').innerHTML = kpiView === 'table' ? renderKPITable() : renderKPIChart();
+        document.getElementById('kpi-side-panel').innerHTML = renderKPISidePanel();
+
+        showToast('Comment added', 'success');
+    } catch (err) {
+        showToast('Failed to add comment', 'error');
+        console.error(err);
+    }
+}
+
+async function deleteKPIComment(metricId, commentId) {
+    if (!confirm('Delete this comment?')) return;
+
+    try {
+        const response = await fetch(`${API}/api/kpis/${metricId}/comments/${commentId}`, {
+            method: 'DELETE'
+        });
+
+        if (await handleApiError(response)) return;
+        if (!response.ok) throw new Error('Failed to delete comment');
+
+        // Reload to refresh state
+        await loadKPIs();
+        document.getElementById('kpi-main-content').innerHTML = kpiView === 'table' ? renderKPITable() : renderKPIChart();
+        document.getElementById('kpi-side-panel').innerHTML = renderKPISidePanel();
+
+        showToast('Comment deleted', 'success');
+    } catch (err) {
+        showToast('Failed to delete comment', 'error');
+        console.error(err);
+    }
+}
+
+// KPI Dialog for adding/editing
+function openKPIDialog(id = null) {
+    const met = id ? kpiGetMetric(id) : null;
+    const title = met ? 'Edit KPI' : 'Add KPI';
+
+    const html = `
+        <div id="kpi-dialog-overlay" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div class="bg-white rounded-lg p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-xl font-bold">${title}</h3>
+                    <button onclick="closeKPIDialog()" class="text-gray-500 hover:text-gray-700">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+
+                <form id="kpi-form" onsubmit="saveKPI(event, ${id || 'null'})">
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">KPI Name</label>
+                            <input type="text" id="kpi-name" required value="${met ? escapeHtml(met.name) : ''}"
+                                class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Unit Label</label>
+                                <input type="text" id="kpi-unit" value="${met ? escapeHtml(met.unit || '') : ''}"
+                                    placeholder="e.g., FPY, seconds"
+                                    class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Unit Type</label>
+                                <select id="kpi-uom" class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+                                    ${Object.entries(KPI_UOM).map(([k, v]) => `<option value="${k}" ${met?.uom === k ? 'selected' : ''}>${v.label}</option>`).join('')}
+                                </select>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Direction</label>
+                            <div class="flex gap-4">
+                                <label class="flex items-center">
+                                    <input type="radio" name="kpi-direction" value="up" ${!met || met.direction === 'up' ? 'checked' : ''} class="mr-2">
+                                    Higher is better
+                                </label>
+                                <label class="flex items-center">
+                                    <input type="radio" name="kpi-direction" value="down" ${met?.direction === 'down' ? 'checked' : ''} class="mr-2">
+                                    Lower is better
+                                </label>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Description (optional)</label>
+                            <textarea id="kpi-description" rows="2" class="w-full px-3 py-2 border border-gray-300 rounded-lg">${met ? escapeHtml(met.description || '') : ''}</textarea>
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Parent KPI (for feeder rollup)</label>
+                            <select id="kpi-parent" class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+                                <option value="">None (top-level KPI)</option>
+                                ${kpiMetrics.filter(m => !m.parentId && (!met || m.id !== met.id)).map(m => `<option value="${m.id}" ${met?.parentId === m.id ? 'selected' : ''}>${escapeHtml(m.name)}</option>`).join('')}
+                            </select>
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Calculation Method</label>
+                            <select id="kpi-calc" class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+                                ${Object.entries(KPI_CALC).map(([k, v]) => `<option value="${k}" ${met?.calcMethod === k ? 'selected' : ''}>${v.label}</option>`).join('')}
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="flex justify-between mt-6 pt-4 border-t">
+                        ${met ? `<button type="button" onclick="deleteKPI(${met.id})" class="px-4 py-2 text-red-600 border border-red-600 rounded-lg hover:bg-red-50">Delete</button>` : '<div></div>'}
+                        <div class="flex gap-3">
+                            <button type="button" onclick="closeKPIDialog()" class="px-4 py-2 border border-gray-300 rounded-lg">Cancel</button>
+                            <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Save</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+    `;
+
+    document.body.insertAdjacentHTML('beforeend', html);
+}
+
+function closeKPIDialog() {
+    document.getElementById('kpi-dialog-overlay')?.remove();
+}
+
+async function saveKPI(e, id) {
+    e.preventDefault();
+
+    const name = document.getElementById('kpi-name').value.trim();
+    const unit = document.getElementById('kpi-unit').value.trim();
+    const uom = document.getElementById('kpi-uom').value;
+    const direction = document.querySelector('input[name="kpi-direction"]:checked').value;
+    const description = document.getElementById('kpi-description').value.trim();
+    const parentId = document.getElementById('kpi-parent').value || null;
+    const calcMethod = document.getElementById('kpi-calc').value;
+
+    if (!name) {
+        showToast('KPI name is required', 'error');
+        return;
+    }
+
+    const data = { name, unit, uom, direction, description, calcMethod };
+    if (parentId) data.parentId = parseInt(parentId);
+
+    try {
+        const url = id ? `${API}/api/kpis/${id}` : `${API}/api/kpis`;
+        const method = id ? 'PUT' : 'POST';
+
+        const response = await fetch(url, {
+            method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+
+        if (await handleApiError(response)) return;
+        if (!response.ok) throw new Error('Failed to save KPI');
+
+        closeKPIDialog();
+        await loadKPIs();
+        renderKPIs();
+        if (kpiView === 'chart') setTimeout(initKPIChart, 100);
+
+        showToast(id ? 'KPI updated' : 'KPI added', 'success');
+    } catch (err) {
+        showToast('Failed to save KPI', 'error');
+        console.error(err);
+    }
+}
+
+async function deleteKPI(id) {
+    const met = kpiGetMetric(id);
+    if (!confirm(`Delete "${met?.name}" and all its data? This cannot be undone.`)) return;
+
+    try {
+        const response = await fetch(`${API}/api/kpis/${id}`, { method: 'DELETE' });
+
+        if (await handleApiError(response)) return;
+        if (!response.ok) throw new Error('Failed to delete KPI');
+
+        closeKPIDialog();
+        kpiSel.metricId = null;
+        await loadKPIs();
+        renderKPIs();
+
+        showToast('KPI deleted', 'success');
+    } catch (err) {
+        showToast('Failed to delete KPI', 'error');
+        console.error(err);
+    }
+}
+
+// CSV Export
+function exportKPIsCSV() {
+    const keys = kpiRangeKeys();
+    const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+
+    const lines = [['Metric', 'Unit', 'Direction', 'Year', 'Month', 'Target', 'Actual', 'Status', 'Comments'].join(',')];
+
+    kpiMetrics.forEach(met => {
+        keys.forEach(k => {
+            const { y, m } = kpiParseKey(k);
+            const v = kpiGetValue(met, k);
+            const st = kpiStatus(met, k);
+            const comments = kpiGetComments(met, k);
+
+            lines.push([
+                q(met.name),
+                q(met.unit || ''),
+                met.direction,
+                y,
+                KPI_MONTHS[m],
+                v.target ?? '',
+                v.actual != null ? Math.round(v.actual * 10000) / 10000 : '',
+                st,
+                q(comments.map(c => (c.author ? c.author + ': ' : '') + c.text).join(' | '))
+            ].join(','));
+        });
+    });
+
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `kpi_scorecard_${keys[0]}_to_${keys[keys.length - 1]}.csv`;
+    a.click();
+
+    showToast('CSV exported', 'success');
 }
